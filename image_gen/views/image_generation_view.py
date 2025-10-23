@@ -1231,3 +1231,4 @@ class DashboardStatsView(APIView):
             return f"{minutes} minute{'s' if minutes > 1 else ''} ago"
         else:
             return "Just now"
+
