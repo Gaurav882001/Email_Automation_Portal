@@ -18,7 +18,7 @@ from PIL import Image
 from io import BytesIO
 
 from utils.response import ResponseInfo
-from image_gen.models import ImageGenerationJob
+from image_gen.models import ImageGenerationJob, ReferenceImage
 
 # Load environment variables
 load_dotenv()
@@ -83,6 +83,15 @@ class ImageGenerationView(APIView):
                 progress=0
             )
             
+            # Store reference images in database
+            for ref_img in reference_images:
+                ReferenceImage.objects.create(
+                    job=job,
+                    image_data=ref_img["image"],
+                    filename=ref_img.get("filename", "reference.jpg"),
+                    content_type=ref_img.get("image_type", "image/jpeg")
+                )
+            
             # Start background processing
             thread = threading.Thread(
                 target=self._process_nano_banana_generation,
@@ -136,8 +145,15 @@ class ImageGenerationView(APIView):
             prompt = job.prompt
             style = job.style
             quality = job.quality
-            # Note: Reference images would need to be stored separately in a related model
+            
+            # Get reference images from database
             reference_images = []
+            for ref_img in job.reference_images.all():
+                reference_images.append({
+                    "image": ref_img.image_data,
+                    "filename": ref_img.filename,
+                    "content_type": ref_img.content_type
+                })
             
             # Quality mapping for dimensions
             quality_mapping = {
@@ -581,7 +597,15 @@ class RetryJobView(APIView):
             prompt = job.prompt
             style = job.style
             quality = job.quality
+            
+            # Get reference images from database
             reference_images = []
+            for ref_img in job.reference_images.all():
+                reference_images.append({
+                    "image": ref_img.image_data,
+                    "filename": ref_img.filename,
+                    "content_type": ref_img.content_type
+                })
             
             # Quality mapping for dimensions
             quality_mapping = {

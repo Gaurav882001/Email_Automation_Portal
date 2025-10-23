@@ -18,9 +18,20 @@ class ImageGenerationJob(models.Model):
     dimensions = models.CharField(max_length=20, null=True, blank=True)
     error_message = models.TextField(null=True, blank=True)
     note = models.TextField(null=True, blank=True)
-    
+
     class Meta:
         ordering = ['-created_at']
-    
+
     def __str__(self):
         return f"Job {self.job_id} - {self.status}"
+
+
+class ReferenceImage(models.Model):
+    job = models.ForeignKey(ImageGenerationJob, on_delete=models.CASCADE, related_name='reference_images')
+    image_data = models.TextField()  # Base64 encoded image data
+    filename = models.CharField(max_length=255)
+    content_type = models.CharField(max_length=100)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Reference image for {self.job.job_id}"
