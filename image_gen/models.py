@@ -4,6 +4,7 @@ import uuid
 
 class ImageGenerationJob(models.Model):
     job_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(Users, on_delete=models.CASCADE, related_name='image_jobs', null=True, blank=True)
     prompt = models.TextField()
     style = models.CharField(max_length=50)
     quality = models.CharField(max_length=50)
@@ -23,7 +24,7 @@ class ImageGenerationJob(models.Model):
         ordering = ['-created_at']
 
     def __str__(self):
-        return f"Job {self.job_id} - {self.status}"
+        return f"Job {self.job_id} - {self.status} - User: {self.user.email if self.user else 'No User'}"
 
 
 class ReferenceImage(models.Model):

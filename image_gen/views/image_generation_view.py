@@ -18,13 +18,33 @@ from PIL import Image
 from io import BytesIO
 
 from utils.response import ResponseInfo
+from utils.jwt_utils import verify_jwt_token
 from image_gen.models import ImageGenerationJob, ReferenceImage
+from image_gen.db_models.user import Users
 
 # Load environment variables
 load_dotenv()
 
 # Disable SSL warnings
 warnings.filterwarnings('ignore', message='Unverified HTTPS request')
+
+def get_current_user(request):
+    """Get current user from JWT token in Authorization header"""
+    try:
+        auth_header = request.META.get('HTTP_AUTHORIZATION', '')
+        if not auth_header.startswith('Bearer '):
+            return None
+        
+        token = auth_header.split(' ')[1]
+        payload = verify_jwt_token(token)
+        
+        if not payload or 'user_id' not in payload:
+            return None
+        
+        user = Users.objects.get(id=payload['user_id'])
+        return user
+    except (Users.DoesNotExist, IndexError, AttributeError):
+        return None
 
 
 class ImageGenerationView(APIView):
@@ -33,6 +53,14 @@ class ImageGenerationView(APIView):
     def post(self, request):
         """Queue an image generation job using Google Genai (Nano Banana)"""
         try:
+            # Get current user from JWT token
+            user = get_current_user(request)
+            if not user:
+                return Response(
+                    ResponseInfo.error("Authentication required"),
+                    status=status.HTTP_401_UNAUTHORIZED
+                )
+            
             # Extract data from request
             prompt = request.data.get('prompt', '').strip()
             style = request.data.get('style', 'realistic')
@@ -76,6 +104,7 @@ class ImageGenerationView(APIView):
             # Create job in database
             job = ImageGenerationJob.objects.create(
                 job_id=job_id,
+                user=user,
                 prompt=prompt,
                 style=style,
                 quality=quality,
@@ -437,11 +466,19 @@ class ImageStatusView(APIView):
     
     def get(self, request, job_id):
         try:
+            # Get current user from JWT token
+            user = get_current_user(request)
+            if not user:
+                return Response(
+                    ResponseInfo.error("Authentication required"),
+                    status=status.HTTP_401_UNAUTHORIZED
+                )
+            
             try:
-                job = ImageGenerationJob.objects.get(job_id=job_id)
+                job = ImageGenerationJob.objects.get(job_id=job_id, user=user)
             except ImageGenerationJob.DoesNotExist:
                 return Response(
-                    ResponseInfo.error("Job not found"),
+                    ResponseInfo.error("Job not found or access denied"),
                     status=status.HTTP_404_NOT_FOUND
                 )
             
@@ -480,7 +517,16 @@ class JobListView(APIView):
     
     def get(self, request):
         try:
-            jobs = ImageGenerationJob.objects.all()
+            # Get current user from JWT token
+            user = get_current_user(request)
+            if not user:
+                return Response(
+                    ResponseInfo.error("Authentication required"),
+                    status=status.HTTP_401_UNAUTHORIZED
+                )
+            
+            # Get jobs only for the current user
+            jobs = ImageGenerationJob.objects.filter(user=user)
             jobs_list = []
             
             for job in jobs:
@@ -517,12 +563,20 @@ class RetryJobView(APIView):
     
     def post(self, request, job_id):
         try:
-            # Get the job from database
+            # Get current user from JWT token
+            user = get_current_user(request)
+            if not user:
+                return Response(
+                    ResponseInfo.error("Authentication required"),
+                    status=status.HTTP_401_UNAUTHORIZED
+                )
+            
+            # Get the job from database and verify ownership
             try:
-                job = ImageGenerationJob.objects.get(job_id=job_id)
+                job = ImageGenerationJob.objects.get(job_id=job_id, user=user)
             except ImageGenerationJob.DoesNotExist:
                 return Response(
-                    ResponseInfo.error("Job not found"),
+                    ResponseInfo.error("Job not found or access denied"),
                     status=status.HTTP_404_NOT_FOUND
                 )
             
