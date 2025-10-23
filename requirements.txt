@@ -81,3 +81,4 @@ uritemplate==4.2.0
 urllib3==1.26.5
 websockets==15.0.1
 zipp==3.23.0
+openai==2.6.0
