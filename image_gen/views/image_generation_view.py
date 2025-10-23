@@ -4,6 +4,8 @@ import base64
 import warnings
 import threading
 import requests
+import csv
+import io
 from datetime import datetime
 from django.conf import settings
 from django.core.files.storage import default_storage
@@ -16,6 +18,7 @@ from dotenv import load_dotenv
 from google import genai
 from PIL import Image
 from io import BytesIO
+import openai
 
 from utils.response import ResponseInfo
 from utils.jwt_utils import verify_jwt_token
@@ -45,6 +48,128 @@ def get_current_user(request):
         return user
     except (Users.DoesNotExist, IndexError, AttributeError):
         return None
+
+
+def process_csv_feedback(csv_file):
+    """Process CSV file and extract feedback data"""
+    try:
+        # Reset file pointer to beginning
+        csv_file.seek(0)
+        
+        # Read CSV content
+        csv_content = csv_file.read().decode('utf-8').strip()
+        print(f"📄 CSV Content Length: {len(csv_content)} characters")
+        print(f"📄 CSV Content Preview: {csv_content[:200]}...")
+        
+        # Check if it's structured CSV (has headers) or simple text feedback
+        lines = csv_content.split('\n')
+        print(f"📄 Number of lines: {len(lines)}")
+        
+        # Try to parse as structured CSV first
+        try:
+            csv_reader = csv.DictReader(io.StringIO(csv_content))
+            feedback_data = []
+            for row in csv_reader:
+                print(f"📊 Processing structured CSV row: {row}")
+                feedback_data.append(row)
+            
+            if feedback_data:
+                print(f"✅ Successfully processed {len(feedback_data)} structured CSV entries")
+                return feedback_data
+        except Exception as csv_error:
+            print(f"📄 Not structured CSV, trying as text feedback: {csv_error}")
+        
+        # If not structured CSV, treat as simple text feedback
+        if csv_content and len(csv_content.strip()) > 0:
+            print("📄 Processing as simple text feedback")
+            feedback_data = [{
+                'feedback_type': 'general',
+                'description': csv_content.strip(),
+                'improvement_suggestion': csv_content.strip()
+            }]
+            print(f"✅ Successfully processed 1 text feedback entry: {feedback_data[0]['description']}")
+            return feedback_data
+        else:
+            print("⚠️ Empty CSV content")
+            return []
+            
+    except Exception as e:
+        print(f"❌ Error processing CSV: {str(e)}")
+        print(f"📄 CSV file type: {type(csv_file)}")
+        print(f"📄 CSV file name: {getattr(csv_file, 'name', 'Unknown')}")
+        return []
+
+
+def generate_enhanced_prompt_with_openai(user_prompt, feedback_data):
+    """Generate enhanced prompt using OpenAI based on CSV feedback"""
+    try:
+        # Get OpenAI API key
+        openai_api_key = os.getenv('OPENAI_API_KEY')
+        
+        if not openai_api_key:
+            print("⚠️ OpenAI API key not found in environment variables")
+            print("💡 Please add OPENAI_API_KEY to your .env file")
+            return user_prompt
+        
+        print(f"🤖 OpenAI API Key: {'Present' if openai_api_key else 'Missing'}")
+        
+        # Prepare feedback summary
+        feedback_summary = ""
+        if feedback_data:
+            feedback_summary = "Based on the following feedback data:\n"
+            for i, feedback in enumerate(feedback_data[:5]):  # Limit to first 5 entries
+                feedback_summary += f"Feedback {i+1}: {str(feedback)}\n"
+            print(f"📊 Processing {len(feedback_data)} feedback entries")
+        
+        # Create prompt for OpenAI
+        system_prompt = """You are an expert at enhancing image generation prompts based on user feedback. 
+        Analyze the user's prompt and the provided feedback data to create an improved, more detailed prompt 
+        that will generate better images. Focus on:
+        1. Adding specific details and improvements based on feedback
+        2. Enhancing visual descriptions
+        3. Adding technical photography terms
+        4. Improving composition and style descriptions
+        
+        Return only the enhanced prompt, no explanations."""
+        
+        user_message = f"""
+        Original user prompt: "{user_prompt}"
+        
+        {feedback_summary}
+        
+        Please enhance this prompt based on the feedback data to create a better image generation prompt.
+        """
+        
+        print("🔄 Calling OpenAI API for prompt enhancement...")
+        
+        # Initialize OpenAI client with new API format
+        client = openai.OpenAI(api_key=openai_api_key)
+        
+        # Call OpenAI API with new format
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message}
+            ],
+            max_tokens=500,
+            temperature=0.7
+        )
+        
+        enhanced_prompt = response.choices[0].message.content.strip()
+        print("=" * 80)
+        print("🎯 PROMPT ENHANCEMENT RESULTS:")
+        print("=" * 80)
+        print(f"📝 Original User Prompt: {user_prompt}")
+        print("-" * 80)
+        print(f"✨ Enhanced Prompt by OpenAI: {enhanced_prompt}")
+        print("=" * 80)
+        return enhanced_prompt
+        
+    except Exception as e:
+        print(f"❌ Error generating enhanced prompt: {str(e)}")
+        print(f"💡 Falling back to original user prompt: {user_prompt}")
+        return user_prompt
 
 
 class ImageGenerationView(APIView):
@@ -101,11 +226,42 @@ class ImageGenerationView(APIView):
                         print(f"Error processing reference image {key}: {str(e)}")
                         continue
             
+            # Process CSV feedback file if provided
+            feedback_data = []
+            csv_file = None
+            print(f"🔍 Checking for CSV files in request.FILES: {list(request.FILES.keys())}")
+            
+            for key, file in request.FILES.items():
+                print(f"📁 Found file: {key}, Content-Type: {file.content_type}, Size: {file.size}")
+                if key == 'csv_feedback' and (file.content_type == 'text/csv' or file.content_type == 'text/plain' or file.name.endswith('.csv') or file.name.endswith('.txt')):
+                    try:
+                        csv_file = file
+                        print(f"✅ CSV file detected: {file.name}")
+                        feedback_data = process_csv_feedback(file)
+                        print(f"📊 Processed CSV feedback with {len(feedback_data)} entries")
+                    except Exception as e:
+                        print(f"❌ Error processing CSV feedback: {str(e)}")
+                        continue
+                elif key == 'csv_feedback':
+                    print(f"⚠️ CSV file found but wrong content type: {file.content_type}")
+            
+            # Generate enhanced prompt using OpenAI if CSV feedback is provided
+            final_prompt = prompt  # Default to user's original prompt
+            if feedback_data and csv_file:
+                print("🤖 CSV feedback detected - Generating enhanced prompt with OpenAI...")
+                print(f"📊 CSV file: {csv_file.name} ({csv_file.size} bytes)")
+                print(f"📈 Feedback entries: {len(feedback_data)}")
+                final_prompt = generate_enhanced_prompt_with_openai(prompt, feedback_data)
+                print(f"🎯 FINAL ENHANCED PROMPT FOR IMAGE GENERATION: {final_prompt}")
+            else:
+                print("📝 No CSV feedback provided - Using original user prompt")
+                print(f"🎯 FINAL PROMPT FOR IMAGE GENERATION: {final_prompt}")
+            
             # Create job in database
             job = ImageGenerationJob.objects.create(
                 job_id=job_id,
                 user=user,
-                prompt=prompt,
+                prompt=final_prompt,  # Use enhanced prompt
                 style=style,
                 quality=quality,
                 status="queued",
@@ -212,7 +368,11 @@ class ImageGenerationView(APIView):
                 # Create client exactly like the working template
                 client = genai.Client(api_key=api_key)
                 
-                print(f"Generating image with Google Genai: {enhanced_prompt}")
+                print("=" * 100)
+                print("🚀 STARTING IMAGE GENERATION WITH GOOGLE GENAI")
+                print("=" * 100)
+                print(f"🎯 PROMPT BEING USED: {enhanced_prompt}")
+                print("=" * 100)
                 job.progress = 50
                 job.save()
                 
@@ -936,3 +1096,138 @@ class RetryJobView(APIView):
             buffer = io.BytesIO()
             image.save(buffer, format='PNG')
             return buffer.getvalue()
+
+class DeleteJobView(APIView):
+    def delete(self, request, job_id):
+        """Delete a job and its associated files from the database and filesystem"""
+        try:
+            # Get current user from JWT token
+            user = get_current_user(request)
+            if not user:
+                return Response(
+                    ResponseInfo.error("Authentication required"),
+                    status=status.HTTP_401_UNAUTHORIZED
+                )
+            
+            try:
+                # Get the job from database
+                job = ImageGenerationJob.objects.get(job_id=job_id, user=user)
+            except ImageGenerationJob.DoesNotExist:
+                return Response(
+                    ResponseInfo.error("Job not found or access denied"),
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            # Delete physical image file if it exists
+            if job.image_url:
+                try:
+                    # Extract file path from URL
+                    if job.image_url.startswith('/media/'):
+                        file_path = job.image_url.replace('/media/', '')
+                        full_path = os.path.join(settings.MEDIA_ROOT, file_path)
+                        if os.path.exists(full_path):
+                            os.remove(full_path)
+                            print(f"✅ Deleted physical file: {full_path}")
+                except Exception as e:
+                    print(f"Warning: Could not delete physical file: {str(e)}")
+            
+            # Delete reference images from database (they are stored as base64, no physical files)
+            job.reference_images.all().delete()
+            
+            # Delete the job record from database
+            job.delete()
+            
+            print(f"✅ Job {job_id} deleted successfully from database")
+            
+            return Response(
+                ResponseInfo.success("Job deleted successfully"),
+                status=status.HTTP_200_OK
+            )
+            
+        except Exception as e:
+            print(f"❌ Error deleting job {job_id}: {str(e)}")
+            return Response(
+                ResponseInfo.error(f"Failed to delete job: {str(e)}"),
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class DashboardStatsView(APIView):
+    def get(self, request):
+        """Get dashboard statistics for the current user"""
+        try:
+            # Get current user from JWT token
+            user = get_current_user(request)
+            if not user:
+                return Response(
+                    ResponseInfo.error("Authentication required"),
+                    status=status.HTTP_401_UNAUTHORIZED
+                )
+            
+            # Get user's job statistics
+            total_jobs = ImageGenerationJob.objects.filter(user=user).count()
+            completed_jobs = ImageGenerationJob.objects.filter(user=user, status='completed').count()
+            processing_jobs = ImageGenerationJob.objects.filter(user=user, status='processing').count()
+            failed_jobs = ImageGenerationJob.objects.filter(user=user, status='failed').count()
+            
+            # Get recent jobs (last 5)
+            recent_jobs = ImageGenerationJob.objects.filter(user=user).order_by('-created_at')[:5]
+            
+            # Format recent activity
+            recent_activity = []
+            for job in recent_jobs:
+                # Calculate time ago
+                time_ago = self._get_time_ago(job.created_at)
+                
+                recent_activity.append({
+                    'id': str(job.job_id),
+                    'type': 'image',
+                    'title': job.prompt[:50] + ('...' if len(job.prompt) > 50 else ''),
+                    'status': job.status,
+                    'time': time_ago,
+                    'image_url': job.image_url,
+                    'created_at': job.created_at.isoformat() if job.created_at else None
+                })
+            
+            stats = {
+                'total_images': completed_jobs,
+                'total_jobs': total_jobs,
+                'processing_jobs': processing_jobs,
+                'failed_jobs': failed_jobs,
+                'success_rate': round((completed_jobs / total_jobs * 100) if total_jobs > 0 else 0, 1)
+            }
+            
+            return Response(
+                ResponseInfo.success({
+                    'stats': stats,
+                    'recent_activity': recent_activity
+                }),
+                status=status.HTTP_200_OK
+            )
+            
+        except Exception as e:
+            print(f"❌ Error getting dashboard stats: {str(e)}")
+            return Response(
+                ResponseInfo.error(f"Failed to get dashboard stats: {str(e)}"),
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    def _get_time_ago(self, created_at):
+        """Calculate time ago string"""
+        if not created_at:
+            return "Unknown time"
+        
+        from django.utils import timezone
+        now = timezone.now()
+        diff = now - created_at
+        
+        if diff.days > 0:
+            return f"{diff.days} day{'s' if diff.days > 1 else ''} ago"
+        elif diff.seconds > 3600:
+            hours = diff.seconds // 3600
+            return f"{hours} hour{'s' if hours > 1 else ''} ago"
+        elif diff.seconds > 60:
+            minutes = diff.seconds // 60
+            return f"{minutes} minute{'s' if minutes > 1 else ''} ago"
+        else:
+            return "Just now"

@@ -2,7 +2,7 @@ from django.urls import path
 from rest_framework.decorators import api_view
 
 from .views import auth_view, general_view
-from .views.image_generation_view import ImageGenerationView, ImageStatusView, JobListView, RetryJobView
+from .views.image_generation_view import ImageGenerationView, ImageStatusView, JobListView, RetryJobView, DeleteJobView, DashboardStatsView
 
 urlpatterns = [
     
@@ -23,5 +23,7 @@ urlpatterns = [
     path('image-status/<str:job_id>/', ImageStatusView.as_view(), name='image-status'),
     path('jobs/', JobListView.as_view(), name='job-list'),
     path('retry-job/<str:job_id>/', RetryJobView.as_view(), name='retry-job'),
+    path('delete-job/<str:job_id>/', DeleteJobView.as_view(), name='delete-job'),
+    path('dashboard-stats/', DashboardStatsView.as_view(), name='dashboard-stats'),
 
 ]
