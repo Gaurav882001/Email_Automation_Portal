@@ -31,6 +31,31 @@ load_dotenv()
 # Disable SSL warnings
 warnings.filterwarnings('ignore', message='Unverified HTTPS request')
 
+# Base prompt template for candy packet images
+BASE_PROMPT_TEMPLATE = """Create a high-quality, vibrant, and visually appealing image of a single candy packet from a premium yet affordable candy brand. 
+The image should reflect: {user_input}. 
+Make the packaging look modern, professional, and enticing. Highlight that these candies are better than others in the market while remaining affordable. 
+Use bright, eye-catching colors, detailed textures, and realistic lighting to make the candies irresistible and visually stand out."""
+
+def create_final_prompt(user_input):
+    """Create final prompt by inserting user input into base prompt template
+    
+    Args:
+        user_input (str): User's description of what they want in the image
+        
+    Returns:
+        str: Final prompt with user_input inserted into template
+    """
+    if not user_input or not user_input.strip():
+        # Fallback to default if user input is empty
+        user_input = "attractive candy design with vibrant colors"
+    
+    final_prompt = BASE_PROMPT_TEMPLATE.format(user_input=user_input.strip())
+    print(f"📝 Base Template Used: {BASE_PROMPT_TEMPLATE[:100]}...")
+    print(f"👤 User Input: {user_input.strip()}")
+    print(f"🎯 Final Prompt Created: {final_prompt[:150]}...")
+    return final_prompt
+
 def get_current_user(request):
     """Get current user from JWT token in Authorization header"""
     try:
@@ -326,7 +351,9 @@ class ImageGenerationView(APIView):
                 final_prompt = generate_enhanced_prompt_with_openai(prompt, feedback_data)
                 print(f"🎯 FINAL ENHANCED PROMPT FOR IMAGE GENERATION: {final_prompt}")
             else:
-                print("📝 No CSV feedback provided - Using original user prompt")
+                print("📝 No CSV feedback provided - Using base template with user input")
+                # Use base prompt template with user's input
+                final_prompt = create_final_prompt(prompt)
                 print(f"🎯 FINAL PROMPT FOR IMAGE GENERATION: {final_prompt}")
             
             # Create job in database
