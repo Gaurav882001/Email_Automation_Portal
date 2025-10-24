@@ -350,9 +350,15 @@ class ImageGenerationView(APIView):
                 print(f"📈 Feedback entries: {len(feedback_data)}")
                 final_prompt = generate_enhanced_prompt_with_openai(prompt, feedback_data)
                 print(f"🎯 FINAL ENHANCED PROMPT FOR IMAGE GENERATION: {final_prompt}")
+            elif reference_images:
+                # Reference images provided - use original prompt as-is
+                print("🖼️  Reference images detected - Using original user prompt without base template")
+                print(f"📸 Number of reference images: {len(reference_images)}")
+                final_prompt = prompt
+                print(f"🎯 FINAL PROMPT FOR IMAGE GENERATION: {final_prompt}")
             else:
-                print("📝 No CSV feedback provided - Using base template with user input")
-                # Use base prompt template with user's input
+                # No reference images and no CSV - use base template with user input
+                print("📝 No reference images or CSV feedback - Using base template with user input")
                 final_prompt = create_final_prompt(prompt)
                 print(f"🎯 FINAL PROMPT FOR IMAGE GENERATION: {final_prompt}")
             
