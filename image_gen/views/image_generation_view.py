@@ -51,7 +51,14 @@ def get_current_user(request):
 
 
 def process_csv_feedback(csv_file):
-    """Process CSV file and extract feedback data"""
+    """Process CSV file and extract feedback data
+    
+    Supports two CSV formats:
+    1. New format: Review ID, Product ASIN, Product Name, Reviewer Name, Reviewer ID, 
+                   Review Title, Review Text, Rating, Verified Purchase, Review Date, 
+                   Helpful Votes, Total Votes, Country
+    2. Old/Simple format: Basic feedback text or any key-value CSV
+    """
     try:
         # Reset file pointer to beginning
         csv_file.seek(0)
@@ -75,6 +82,7 @@ def process_csv_feedback(csv_file):
             
             if feedback_data:
                 print(f"✅ Successfully processed {len(feedback_data)} structured CSV entries")
+                print(f"📋 CSV Headers detected: {list(feedback_data[0].keys())}")
                 return feedback_data
         except Exception as csv_error:
             print(f"📄 Not structured CSV, trying as text feedback: {csv_error}")
@@ -94,14 +102,45 @@ def process_csv_feedback(csv_file):
             return []
             
     except Exception as e:
-        print(f"❌ Error processing CSV: {str(e)}")
+        print(f"❌ Error processing CSV feedback: {str(e)}")
         print(f"📄 CSV file type: {type(csv_file)}")
         print(f"📄 CSV file name: {getattr(csv_file, 'name', 'Unknown')}")
         return []
 
 
+def extract_review_text_from_csv(feedback_data):
+    """Extract review text from CSV data based on new CSV structure
+    
+    Checks for 'Review Text' column (new format) or falls back to other text fields
+    """
+    if not feedback_data:
+        return ""
+    
+    review_texts = []
+    
+    for row in feedback_data:
+        # Check for new CSV format columns
+        if 'Review Text' in row and row['Review Text']:
+            review_texts.append(row['Review Text'].strip())
+        elif 'Review Title' in row and row['Review Title']:
+            review_texts.append(row['Review Title'].strip())
+        # Fallback to old format columns
+        elif 'description' in row and row['description']:
+            review_texts.append(row['description'].strip())
+        elif 'improvement_suggestion' in row and row['improvement_suggestion']:
+            review_texts.append(row['improvement_suggestion'].strip())
+    
+    # Join all review texts with newline separator
+    combined_review_text = "\n".join(review_texts)
+    print(f"📝 Extracted Review Text: {combined_review_text[:300]}...")
+    return combined_review_text
+
+
 def generate_enhanced_prompt_with_openai(user_prompt, feedback_data):
-    """Generate enhanced prompt using OpenAI based on CSV feedback"""
+    """Generate enhanced prompt using OpenAI based on CSV feedback and Review Text
+    
+    Uses the new CSV structure to extract Review Text and ratings for better prompt generation
+    """
     try:
         # Get OpenAI API key
         openai_api_key = os.getenv('OPENAI_API_KEY')
@@ -113,22 +152,46 @@ def generate_enhanced_prompt_with_openai(user_prompt, feedback_data):
         
         print(f"🤖 OpenAI API Key: {'Present' if openai_api_key else 'Missing'}")
         
-        # Prepare feedback summary
+        # Extract review text from CSV using new structure
+        review_text = extract_review_text_from_csv(feedback_data)
+        
+        # Prepare feedback summary with additional metadata from new CSV structure
         feedback_summary = ""
         if feedback_data:
-            feedback_summary = "Based on the following feedback data:\n"
+            feedback_summary = "Based on the following product review feedback:\n"
+            
             for i, feedback in enumerate(feedback_data[:5]):  # Limit to first 5 entries
-                feedback_summary += f"Feedback {i+1}: {str(feedback)}\n"
-            print(f"📊 Processing {len(feedback_data)} feedback entries")
+                # New CSV format fields
+                product_name = feedback.get('Product Name', 'Unknown Product')
+                rating = feedback.get('Rating', 'N/A')
+                review_text_field = feedback.get('Review Text', '')
+                review_title = feedback.get('Review Title', '')
+                verified = feedback.get('Verified Purchase', 'No')
+                helpful_votes = feedback.get('Helpful Votes', 0)
+                
+                feedback_summary += f"\n📦 Review {i+1}:\n"
+                feedback_summary += f"  • Product: {product_name}\n"
+                feedback_summary += f"  • Rating: {rating}/5 stars\n"
+                if review_title:
+                    feedback_summary += f"  • Title: {review_title}\n"
+                if review_text_field:
+                    feedback_summary += f"  • Review: {review_text_field[:200]}...\n"
+                feedback_summary += f"  • Verified Purchase: {verified}\n"
+                feedback_summary += f"  • Helpful Votes: {helpful_votes}\n"
+            
+            print(f"📊 Processing {len(feedback_data)} review feedback entries")
         
         # Create prompt for OpenAI
-        system_prompt = """You are an expert at enhancing image generation prompts based on user feedback. 
-        Analyze the user's prompt and the provided feedback data to create an improved, more detailed prompt 
+        system_prompt = """You are an expert at enhancing image generation prompts based on product review feedback. 
+        Analyze the user's prompt and the provided customer reviews to create an improved, more detailed prompt 
         that will generate better images. Focus on:
-        1. Adding specific details and improvements based on feedback
-        2. Enhancing visual descriptions
-        3. Adding technical photography terms
-        4. Improving composition and style descriptions
+        1. Understanding customer preferences from review ratings and text
+        2. Incorporating specific product features mentioned in reviews
+        3. Adding visual elements that customers appreciate
+        4. Enhancing composition based on verified purchase feedback
+        5. Including style and quality elements that align with high-rated reviews
+        6. Adding technical photography terms
+        7. Improving visual descriptions based on customer sentiment
         
         Return only the enhanced prompt, no explanations."""
         
@@ -137,10 +200,11 @@ def generate_enhanced_prompt_with_openai(user_prompt, feedback_data):
         
         {feedback_summary}
         
-        Please enhance this prompt based on the feedback data to create a better image generation prompt.
+        Please enhance this prompt based on the product review feedback to create a better image generation prompt. 
+        Consider the ratings, customer feedback, and product details from the reviews to make the image more aligned with what customers appreciate.
         """
         
-        print("🔄 Calling OpenAI API for prompt enhancement...")
+        print("🔄 Calling OpenAI API for prompt enhancement with review feedback...")
         
         # Initialize OpenAI client with new API format
         client = openai.OpenAI(api_key=openai_api_key)
@@ -158,9 +222,17 @@ def generate_enhanced_prompt_with_openai(user_prompt, feedback_data):
         
         enhanced_prompt = response.choices[0].message.content.strip()
         print("=" * 80)
-        print("🎯 PROMPT ENHANCEMENT RESULTS:")
+        print("🎯 PROMPT ENHANCEMENT RESULTS FROM REVIEW FEEDBACK:")
         print("=" * 80)
         print(f"📝 Original User Prompt: {user_prompt}")
+        print("-" * 80)
+        print(f"📦 Review Data Summary:")
+        print(f"   • Total Reviews: {len(feedback_data)}")
+        if feedback_data:
+            ratings = [f.get('Rating', 0) for f in feedback_data if f.get('Rating')]
+            if ratings:
+                avg_rating = sum(float(r) for r in ratings if r) / len([r for r in ratings if r])
+                print(f"   • Average Rating: {avg_rating:.1f}/5 stars")
         print("-" * 80)
         print(f"✨ Enhanced Prompt by OpenAI: {enhanced_prompt}")
         print("=" * 80)
