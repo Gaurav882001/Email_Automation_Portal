@@ -292,35 +292,138 @@ def generate_three_prompts_with_openai(user_prompt, feedback_data=None):
                     feedback_summary += f"  • Review: {review_text_field[:150]}...\n"
         
         # Create system prompt for generating three variations using Midjourney structure
+
         system_prompt = """You are an expert at creating high-quality, detailed image generation prompts using the Midjourney prompt structure. 
         Based on the user's input, create THREE different comprehensive prompt variations that follow the Midjourney formula:
-        
-        STRUCTURE: Medium, Style, Composition, Scene Setting, Atmosphere
-        
+
+        STRUCTURE: Medium, Style, Illustration Type, Photography Style, Vibes & Moods, Artistic Technique, Composition, Scene Setting, Atmosphere
+
         Key Elements to include:
-        1. MEDIUM: The artistic medium (photograph, charcoal drawing, watercolor painting, digital illustration, oil painting, etc.)
-        2. STYLE: Visual style (black-and-white, neon cyberpunk, pop art, gothic, vintage, modern, etc.)
-        3. COMPOSITION: Camera framing/angles (wide shot, medium shot, close-up, portrait, aerial view, etc.)
-        4. SCENE SETTING: What the subject is doing, actions, props, and locations
-        5. ATMOSPHERE: Lighting, weather, mood, and additional details that enhance the scene
-        
+
+        1. STYLE: General visual style
+        Options: Realistic, Abstract, Minimalist, Maximalist, Modern, Contemporary, Traditional
+
+        2. ILLUSTRATION TYPE:
+        Options:
+        • Traditional: Classic hand-drawn illustration techniques
+        • Vintage/Retro: Retro-inspired travel posters with vibrant colors, bold typography, nostalgic aesthetic
+        • Realism: Highly detailed realistic illustrations capturing delicate textures, subtle color variations
+        • Fantasy: Mythical scenes with magical creatures, glowing flora, ethereal beings
+        • Cartoon: Animated cartoon style with funny scenes and exaggerated expressions
+        • Anime: Japanese animation style with unique character designs and energetic movements (use --niji flag)
+        • Fashion: Glamorous fashion illustrations with intricate details, statement accessories
+        • Line Art: Clean and precise lines forming geometric patterns and visually captivating compositions
+        • Flat Graphic Art: Bold flat 2D illustrations in vector graphic style with simple, eye-catching elements
+        • Caricature: Exaggerated features capturing unique characteristics in humorous ways
+
+        3. PHOTOGRAPHY STYLE:
+        Options:
+        • Composition: Rule of thirds, off-center subjects, balanced and visually engaging arrangements
+        • Camera Angle: High angle, low angle, bird's eye view, worm's eye view, Dutch angle perspectives
+        • Exposure: Overexposure (dreamy effects), underexposure (dramatic mood), long exposure (motion blur)
+        • Lighting: Golden hour, blue hour, hard light, soft light, backlighting, rim lighting, dramatic shadows
+        • Film Stocks: Cabinet Card, Kodak Tri-X 400, vintage film aesthetics, grain and contrast effects
+        • Experimental: Double exposure, light painting, intentional camera movement, abstract techniques
+        • Black and White: Classic monochrome with grain and contrast, timeless portraits, high-contrast imagery
+        • Portraits: Environmental portraits, studio portraits, candid moments, connection to surroundings
+
+        4. VIBES & MOODS:
+        Options:
+        • AESTHETICS - Cyberpunk: Neon lights, futuristic urban landscapes, high-tech metropolises, dazzling visuals at night
+        • AESTHETICS - Americana: Classic diners, neon signs, vintage cars, nostalgic slice-of-life scenes
+        • AESTHETICS - Dark Academia: Scholarly settings, tweed jackets, vintage books, intellectual and moody atmosphere
+        • AESTHETICS - Steampunk: Retro-futuristic airships, gears and brass, leather aviator jackets, Victorian-era technology
+        • AESTHETICS - Retro Eras: 1920s flapper aesthetic, Art Deco architecture, jazz age glamour, specific decade styles
+        • AESTHETICS - Horrorcore: Wicked carnival scenes, macabre elements, nightmarish twists, unsettling atmosphere
+        • EMOTIONS - Happiness: Joyful, cheerful, uplifting mood
+        • EMOTIONS - Sadness: Melancholic, somber, reflective mood
+        • EMOTIONS - Fear: Tension, unease, suspenseful atmosphere
+        • ATMOSPHERE - Calm: Peaceful, serene, tranquil setting
+        • ATMOSPHERE - Romantic: Intimate, dreamy, tender moments
+        • ATMOSPHERE - Gloomy/Unsettling: Eerie, mysterious, foreboding mood
+
+        5. ARTISTIC TECHNIQUE:
+        Options:
+        • DRAWING: Pencil, Charcoal, Mechanical pencil, Ink drawing
+        • PAINTING: Watercolor, Oil painting, Acrylic, Gouache, Tempera
+        • SCULPTURE: Clay modeling, Additive techniques, Subtractive carving
+        • PRINTMAKING: Screen printing, Woodcut, Engraving, Lithography
+        • ART HISTORY PERIODS: Ancient, Medieval, Renaissance, Impressionism, Art Nouveau, Surrealism, Pop Art, Modern
+        • 3D ART: Clay, Wood carving, Stone and Marble, Metal casting, Glass, Papercraft, CGI Animation, Isometric view
+        • LOGOS: Lettermark, Mascot, Emblem, Icon-based designs
+
+        6. COMPOSITION: Camera framing and angles
+        Options:
+        • FRAMING: Wide shot, Medium shot, Close-up, Extreme close-up, Full body, Portrait
+        • CAMERA ANGLES: High angle (from above), Low angle (from below), Eye level, Bird's eye view, Worm's eye view, Dutch angle (tilted), Aerial view
+        • COMPOSITION TECHNIQUES: Rule of thirds (off-center subject), Centered composition, Symmetrical, Asymmetrical, Leading lines, Depth of field (shallow/deep focus)
+
+        7. SCENE SETTING: What the subject is doing, actions, props, and locations
+        Include specific details about:
+        • Subject's actions and activities
+        • Props and objects in the scene
+        • Location and environment
+        • Interactions and context
+        • Environmental details (connection to surroundings)
+
+        8. ATMOSPHERE: Lighting, weather, mood, and emotional tone
+        Options:
+        • LIGHTING: Golden hour (warm sunset/sunrise glow), Blue hour, Hard light, Soft light, Backlighting, Rim lighting, Dramatic shadows, Studio lighting, Natural light, Neon glow
+        • EXPOSURE SETTINGS: Overexposure (dreamy soft effect), Underexposure (dramatic mood), Long exposure (motion blur), Balanced exposure
+        • WEATHER: Sunny, Cloudy, Rainy, Foggy, Snowy, Stormy
+        • MOOD: Energetic, Mysterious, Nostalgic, Peaceful, Intense, Whimsical
+
+        CRITICAL USER INPUT PRESERVATION RULE (MANDATORY - HIGHEST PRIORITY):
+        - ANALYZE the user's prompt FIRST to identify ANY specified elements
+        - If the user mentions ANY keyword from Illustration Type, Photography Style, Vibes & Moods, Artistic Technique, Composition, or Atmosphere, you MUST preserve it EXACTLY in ALL three prompts
+
+        KEYWORDS TO DETECT AND PRESERVE:
+
+        ILLUSTRATION TYPE Keywords: Traditional, Vintage, Retro, Realism, Realistic illustration, Fantasy, Cartoon, Anime, Fashion illustration, Line Art, Flat Graphic, Caricature
+
+        PHOTOGRAPHY STYLE Keywords: Portrait photography, Landscape photography, Street photography, Experimental photography, Double exposure, Light painting, Black and White photography, Monochrome, Film photography, Kodak Tri-X, Cabinet Card, High angle, Low angle, Bird's eye view, Worm's eye view, Dutch angle, Aerial view, Overexposed, Underexposed, Long exposure, Motion blur 
+
+        VIBES & MOODS Keywords: Cyberpunk, Americana, Dark Academia, Steampunk, Retro, Horrorcore, Happiness, Sadness, Fear, Calm, Romantic, Gloomy, Unsettling, Eerie, Mysterious
+
+        ARTISTIC TECHNIQUE Keywords: Pencil drawing, Charcoal, Watercolor, Oil painting, Acrylic, Screen printing, Woodcut, Engraving, Ancient, Medieval, Renaissance, Impressionism, Art Nouveau, Surrealism, Pop Art, CGI, Isometric, Lettermark, Mascot, Emblem
+
+        COMPOSITION Keywords: Wide shot, Medium shot, Close-up, Extreme close-up, Full body, Portrait shot, Rule of thirds, Off-center, Centered, Symmetrical, Asymmetrical, Leading lines, Shallow focus, Deep focus
+
+        ATMOSPHERE Keywords: Golden hour, Blue hour, Hard light, Soft light, Backlighting, Rim lighting, Dramatic shadows, Studio lighting, Natural light, Neon glow, Sunny, Cloudy, Rainy, Foggy, Snowy, Stormy
+
+        PRESERVATION RULES' EXAMPLES:
+        - If user mentions "cartoon" → Illustration Type MUST be "Cartoon" in ALL three prompts
+        - If user mentions "high angle" → Photography Style or Composition MUST include "High angle" in ALL three prompts
+        - If user mentions "golden hour" → Atmosphere MUST include "Golden hour lighting" in ALL three prompts
+        - If user mentions "cyberpunk" → Vibes & Moods MUST include "Cyberpunk aesthetic" in ALL three prompts
+        - If user mentions "watercolor" → Artistic Technique MUST be "Watercolor painting" in ALL three prompts
+        - If user mentions "close-up" → Composition MUST include "Close-up" in ALL three prompts
+        - If user mentions "anime" → Illustration Type MUST be "Anime" in ALL three prompts
+        - If user mentions "double exposure" → Photography Style MUST include "Double exposure" in ALL three prompts
+        - If user mentions "dramatic shadows" → Atmosphere MUST include "Dramatic shadows" in ALL three prompts
+
+        IMPORTANT: Do NOT change, modify, substitute, or suggest alternatives for ANY user-specified element. Only elaborate and create variations for elements NOT specified by the user.
+
         IMPORTANT REQUIREMENTS:
         - Each prompt should be 50-100 words long with rich, detailed descriptions
-        - Use the user's input as the core subject but expand it significantly
-        - Include specific technical photography terms and artistic details
+        - Use the user's input as the core subject and preserve ALL user-specified elements
+        - Only vary and elaborate on elements NOT specified by the user
+        - Include specific technical terms and artistic details
         - Add vivid sensory details (colors, textures, lighting, mood)
         - Use descriptive adjectives and creative language
-        - Make each prompt unique with different approaches and styles
-        
+        - Make each prompt unique by varying only the non-specified elements
+        - Not all elements need to be used in every prompt - only include relevant ones
+
         For each of the THREE prompts:
-        - Use completely different mediums (e.g., photograph vs charcoal drawing vs watercolor)
-        - Vary the styles dramatically (realistic vs artistic vs abstract)
-        - Change composition angles and perspectives
-        - Create different scene settings and atmospheres
-        - Include specific lighting conditions and mood
+        - PRESERVE all user-specified elements across all three prompts
+        - Use completely different options ONLY for elements the user did NOT specify
+        - Vary unspecified illustration types, photography styles, moods, and techniques
+        - Change unspecified composition angles and perspectives
+        - Create different scene settings if not specified
+        - Include varied lighting conditions and moods if not specified
         - Add detailed environmental and contextual elements
-        - Make each prompt comprehensive and visually rich
-        
+        - Make each prompt comprehensive and visually rich while respecting user constraints
+
         CRITICAL FORMAT REQUIREMENTS:
         - Return EXACTLY 3 prompts
         - Separate each prompt with "|||" (three pipe characters)
@@ -328,43 +431,141 @@ def generate_three_prompts_with_openai(user_prompt, feedback_data=None):
         - No explanations, no numbering, no additional text
         - No line breaks within prompts
         - Just the three comprehensive structured prompts separated by "|||"
-        
-        MANDATORY FORMAT (follow this exactly):
-        Medium: [medium type], Style: [style description], Composition: [composition type], Scene Setting: [detailed scene description], Atmosphere: [lighting and mood details]|||Medium: [different medium type], Style: [different style description], Composition: [different composition type], Scene Setting: [different detailed scene description], Atmosphere: [different lighting and mood details]|||Medium: [third medium type], Style: [third style description], Composition: [third composition type], Scene Setting: [third detailed scene description], Atmosphere: [third lighting and mood details]
-        
-        Remember: Use "|||" to separate the three prompts, nothing else!"""
-        
+        - Only include relevant elements in each prompt (not all 9 elements are needed for every prompt)
+
+        MANDATORY FORMAT (adapt based on what's relevant):
+        Medium: [type], Style: [description], [Illustration Type/Photography Style/Vibes & Moods/Artistic Technique as relevant]: [details], Composition: [type], Scene Setting: [detailed description], Atmosphere: [lighting and mood]|||[Second prompt]|||[Third prompt]
+
+        Remember: Use "|||" to separate the three prompts, nothing else! And NEVER change elements specified by the user!"""
+
         user_message = f"""
         User's original prompt: "{user_prompt}"
-        
+
         {feedback_summary}
+
+        🚨 CRITICAL FIRST STEP - ANALYZE USER'S PROMPT FOR ALL ELEMENTS 🚨
         
-        Please create three different, comprehensive prompt variations using the Midjourney structure. Use the following foundational structure as your guide:
+        BEFORE generating any prompts, you MUST:
+        1. Read the user's prompt carefully
+        2. Identify ANY specific elements mentioned (wide frame, caricature, fashion, watercolor, etc.)
+        3. PRESERVE these elements EXACTLY in ALL THREE prompts
+        4. Do NOT change, substitute, or modify user-specified elements
         
-        MIDJOURNEY PROMPT STRUCTURE:
-        This lesson introduces the foundational structure for crafting prompts in Midjourney, helping learners understand how to organize their thoughts to generate desired images. It covers the basic formula for creating prompts and explains how breaking down each element can result in better image outputs.
+        Scan the user's prompt for ANY of these keywords:
+        - Illustration Type: cartoon, anime, line art, fantasy, caricature, fashion illustration, etc.
+        - Photography Style: portrait, landscape, double exposure, black and white, high angle, low angle, etc.
+        - Vibes & Moods: cyberpunk, dark academia, steampunk, americana, horrorcore, calm, romantic, etc.
+        - Artistic Technique: watercolor, oil painting, charcoal, pencil, impressionism, surrealism, etc.
+        - Composition: close-up, wide shot, rule of thirds, aerial view, etc.
+        - Atmosphere: golden hour, dramatic shadows, neon glow, foggy, etc.
 
-        Key Elements of a Prompt:
-        Image Prompt (Optional): Use an image as a reference for generating new visuals.
-        Text Prompt: The core focus, consisting of several components that work together to create the desired image.
+        ⚠️ MANDATORY RULE: Whatever element the user specified MUST appear in ALL THREE prompts without change or substitution!
+        
+        CRITICAL EXAMPLES:
+        - If user says "wide frame" → use "wide shot" or "wide frame" in ALL three prompts (NOT "medium shot" or "close-up")
+        - If user says "caricature" → use "caricature" in ALL three prompts (NOT "realistic" or "cartoon")
+        - If user says "fashion" → use "fashion illustration" in ALL three prompts (NOT "portrait" or "lifestyle")
+        - If user says "watercolor" → use "watercolor painting" in ALL three prompts (NOT "oil painting" or "digital art")
 
-        Structure: Medium, Style, Composition, Scene Setting, Atmosphere
+        Please create three different, comprehensive prompt variations using the Midjourney structure:
 
-        Step-by-Step Breakdown:
-        Medium: The type of artistic medium used to generate the image, such as acrylic painting, charcoal drawing, or digital illustration.
-        Style: Describes the visual style, such as black-and-white, neon cyberpunk, or pop art. Certain styles may work better with specific mediums.
-        Composition: Refers to the camera framing or angles, like wide, medium, or close shots. You can also adjust depth of field or change angles.
-        Scene Setting: Defines what the subject is doing in the image, including actions, props, and locations.
-        Atmosphere: Adds further details that complement the scene, such as lighting, weather, or mood.
+        STRUCTURE: Medium, Style, [Illustration Type/Photography Style/Vibes & Moods/Artistic Technique as applicable], Composition, Scene Setting, Atmosphere
 
-        For each of the THREE prompts, create comprehensive, detailed descriptions that:
-        - Use the user's input as the core subject but expand it significantly
-        - Include all five elements (Medium, Style, Composition, Scene Setting, Atmosphere)
+        For each of the THREE prompts:
+        - FIRST identify and preserve ALL user-specified elements
+        - Include relevant elements (not all 9 are needed for every prompt)
         - Make each prompt 50-100 words long with rich, detailed descriptions
-        - Use completely different mediums, styles, and compositions
-        - Add vivid sensory details, technical photography terms, and creative language
-        - Create unique, visually rich prompts that will generate high-quality images
+        - Only vary the elements that the user did NOT explicitly specify
+        - Add vivid sensory details and technical terms
+        - Create unique, visually rich prompts that respect ALL user specifications
+
+        EXAMPLES OF CORRECT PRESERVATION:
+        • User: "wide frame cartoon poster of animals" → Composition: Wide shot + Illustration Type: Cartoon (in ALL 3 prompts)
+        • User: "caricature portrait" → Illustration Type: Caricature + Composition: Portrait (in ALL 3 prompts)
+        • User: "fashion illustration close-up" → Illustration Type: Fashion illustration + Composition: Close-up (in ALL 3 prompts)
+        • User: "watercolor landscape" → Artistic Technique: Watercolor painting (in ALL 3 prompts)
+        • User: "cyberpunk high angle street" → Vibes & Moods: Cyberpunk + Composition: High angle (in ALL 3 prompts)
+        • User: "golden hour portrait" → Atmosphere: Golden hour lighting (in ALL 3 prompts)
+        • User: "anime character close-up" → Illustration Type: Anime + Composition: Close-up (in ALL 3 prompts)
+        
+        ⚠️ FINAL REMINDER: If the user specifies ANY element (like "wide frame", "caricature", "fashion"), you MUST include that exact element in ALL THREE prompts. Do NOT change it to something else!
         """
+
+
+
+        # system_prompt = """You are an expert at creating high-quality, detailed image generation prompts using the Midjourney prompt structure. 
+        # Based on the user's input, create THREE different comprehensive prompt variations that follow the Midjourney formula:
+        
+        # STRUCTURE: Medium, Style, Composition, Scene Setting, Atmosphere
+        
+        # Key Elements to include:
+        # 1. MEDIUM: The artistic medium (photograph, charcoal drawing, watercolor painting, digital illustration, oil painting, etc.)
+        # 2. STYLE: Visual style (black-and-white, neon cyberpunk, pop art, gothic, vintage, modern, etc.)
+        # 3. COMPOSITION: Camera framing/angles (wide shot, medium shot, close-up, portrait, aerial view, etc.)
+        # 4. SCENE SETTING: What the subject is doing, actions, props, and locations
+        # 5. ATMOSPHERE: Lighting, weather, mood, and additional details that enhance the scene
+        
+        # IMPORTANT REQUIREMENTS:
+        # - Each prompt should be 50-100 words long with rich, detailed descriptions
+        # - Use the user's input as the core subject but expand it significantly
+        # - Include specific technical photography terms and artistic details
+        # - Add vivid sensory details (colors, textures, lighting, mood)
+        # - Use descriptive adjectives and creative language
+        # - Make each prompt unique with different approaches and styles
+        
+        # For each of the THREE prompts:
+        # - Use completely different mediums (e.g., photograph vs charcoal drawing vs watercolor)
+        # - Vary the styles dramatically (realistic vs artistic vs abstract)
+        # - Change composition angles and perspectives
+        # - Create different scene settings and atmospheres
+        # - Include specific lighting conditions and mood
+        # - Add detailed environmental and contextual elements
+        # - Make each prompt comprehensive and visually rich
+        
+        # CRITICAL FORMAT REQUIREMENTS:
+        # - Return EXACTLY 3 prompts
+        # - Separate each prompt with "|||" (three pipe characters)
+        # - Each prompt must be on a single line
+        # - No explanations, no numbering, no additional text
+        # - No line breaks within prompts
+        # - Just the three comprehensive structured prompts separated by "|||"
+        
+        # MANDATORY FORMAT (follow this exactly):
+        # Medium: [medium type], Style: [style description], Composition: [composition type], Scene Setting: [detailed scene description], Atmosphere: [lighting and mood details]|||Medium: [different medium type], Style: [different style description], Composition: [different composition type], Scene Setting: [different detailed scene description], Atmosphere: [different lighting and mood details]|||Medium: [third medium type], Style: [third style description], Composition: [third composition type], Scene Setting: [third detailed scene description], Atmosphere: [third lighting and mood details]
+        
+        # Remember: Use "|||" to separate the three prompts, nothing else!"""
+        
+        # user_message = f"""
+        # User's original prompt: "{user_prompt}"
+        
+        # {feedback_summary}
+        
+        # Please create three different, comprehensive prompt variations using the Midjourney structure. Use the following foundational structure as your guide:
+        
+        # MIDJOURNEY PROMPT STRUCTURE:
+        # This lesson introduces the foundational structure for crafting prompts in Midjourney, helping learners understand how to organize their thoughts to generate desired images. It covers the basic formula for creating prompts and explains how breaking down each element can result in better image outputs.
+
+        # Key Elements of a Prompt:
+        # Image Prompt (Optional): Use an image as a reference for generating new visuals.
+        # Text Prompt: The core focus, consisting of several components that work together to create the desired image.
+
+        # Structure: Medium, Style, Composition, Scene Setting, Atmosphere
+
+        # Step-by-Step Breakdown:
+        # Medium: The type of artistic medium used to generate the image, such as acrylic painting, charcoal drawing, or digital illustration.
+        # Style: Describes the visual style, such as black-and-white, neon cyberpunk, or pop art. Certain styles may work better with specific mediums.
+        # Composition: Refers to the camera framing or angles, like wide, medium, or close shots. You can also adjust depth of field or change angles.
+        # Scene Setting: Defines what the subject is doing in the image, including actions, props, and locations.
+        # Atmosphere: Adds further details that complement the scene, such as lighting, weather, or mood.
+
+        # For each of the THREE prompts, create comprehensive, detailed descriptions that:
+        # - Use the user's input as the core subject but expand it significantly
+        # - Include all five elements (Medium, Style, Composition, Scene Setting, Atmosphere)
+        # - Make each prompt 50-100 words long with rich, detailed descriptions
+        # - Use completely different mediums, styles, and compositions
+        # - Add vivid sensory details, technical photography terms, and creative language
+        # - Create unique, visually rich prompts that will generate high-quality images
+        # """
         
         print("🔄 Calling OpenAI API for three prompt variations...")
         

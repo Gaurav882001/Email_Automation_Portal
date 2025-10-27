@@ -36,3 +36,28 @@ class ReferenceImage(models.Model):
 
     def __str__(self):
         return f"Reference image for {self.job.job_id}"
+
+
+class VideoGenerationJob(models.Model):
+    job_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(Users, on_delete=models.CASCADE, related_name='video_jobs', null=True, blank=True)
+    prompt = models.TextField()
+    style = models.CharField(max_length=50, default='realistic')
+    quality = models.CharField(max_length=50, default='high')
+    duration = models.IntegerField(default=5)  # Duration in seconds
+    status = models.CharField(max_length=20, default='queued')
+    progress = models.IntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    video_url = models.URLField(null=True, blank=True)
+    video_file_path = models.CharField(max_length=500, null=True, blank=True)
+    provider = models.CharField(max_length=100, default='veo-3.1')
+    error_message = models.TextField(null=True, blank=True)
+    note = models.TextField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"Video Job {self.job_id} - {self.status} - User: {self.user.email if self.user else 'No User'}"

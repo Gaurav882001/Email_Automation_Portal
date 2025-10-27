@@ -3,6 +3,7 @@ from rest_framework.decorators import api_view
 
 from .views import auth_view, general_view
 from .views.image_generation_view import ImageGenerationView, ImageStatusView, JobListView, RetryJobView, DeleteJobView, DashboardStatsView, PromptGenerationView
+from .views.video_generation_view import VideoGenerationView, VideoStatusView, VideoJobListView, VideoRetryJobView, VideoDeleteJobView, VideoDashboardStatsView
 
 urlpatterns = [
     
@@ -28,5 +29,13 @@ urlpatterns = [
     path('retry-job/<str:job_id>/', RetryJobView.as_view(), name='retry-job'),
     path('delete-job/<str:job_id>/', DeleteJobView.as_view(), name='delete-job'),
     path('dashboard-stats/', DashboardStatsView.as_view(), name='dashboard-stats'),
+
+    # Video generation with Google Veo 3.1
+    path('generate-video/', VideoGenerationView.as_view(), name='generate-video'),
+    path('video-status/<str:job_id>/', VideoStatusView.as_view(), name='video-status'),
+    path('video-jobs/', VideoJobListView.as_view(), name='video-job-list'),
+    path('retry-video-job/<str:job_id>/', VideoRetryJobView.as_view(), name='retry-video-job'),
+    path('delete-video-job/<str:job_id>/', VideoDeleteJobView.as_view(), name='delete-video-job'),
+    path('video-dashboard-stats/', VideoDashboardStatsView.as_view(), name='video-dashboard-stats'),
 
 ]
