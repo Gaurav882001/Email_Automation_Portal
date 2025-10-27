@@ -6,6 +6,7 @@ import threading
 import requests
 import csv
 import io
+import time
 from datetime import datetime
 from django.conf import settings
 from django.core.files.storage import default_storage
@@ -320,8 +321,18 @@ def generate_three_prompts_with_openai(user_prompt, feedback_data=None):
         - Add detailed environmental and contextual elements
         - Make each prompt comprehensive and visually rich
         
-        Return ONLY the three detailed prompts, separated by "|||" (three pipe characters).
-        No explanations, just the three comprehensive structured prompts."""
+        CRITICAL FORMAT REQUIREMENTS:
+        - Return EXACTLY 3 prompts
+        - Separate each prompt with "|||" (three pipe characters)
+        - Each prompt must be on a single line
+        - No explanations, no numbering, no additional text
+        - No line breaks within prompts
+        - Just the three comprehensive structured prompts separated by "|||"
+        
+        MANDATORY FORMAT (follow this exactly):
+        Medium: [medium type], Style: [style description], Composition: [composition type], Scene Setting: [detailed scene description], Atmosphere: [lighting and mood details]|||Medium: [different medium type], Style: [different style description], Composition: [different composition type], Scene Setting: [different detailed scene description], Atmosphere: [different lighting and mood details]|||Medium: [third medium type], Style: [third style description], Composition: [third composition type], Scene Setting: [third detailed scene description], Atmosphere: [third lighting and mood details]
+        
+        Remember: Use "|||" to separate the three prompts, nothing else!"""
         
         user_message = f"""
         User's original prompt: "{user_prompt}"
@@ -360,35 +371,95 @@ def generate_three_prompts_with_openai(user_prompt, feedback_data=None):
         # Initialize OpenAI client
         client = openai.OpenAI(api_key=openai_api_key)
         
-        # Call OpenAI API
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_message}
-            ],
-            max_tokens=800,
-            temperature=0.8  # Higher temperature for more creative variations
-        )
+        # Retry logic for API call
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                # Call OpenAI API
+                response = client.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_message}
+                    ],
+                    max_tokens=1000,  # Increased token limit
+                    temperature=0.8,  # Higher temperature for more creative variations
+                    top_p=0.9,  # Add top_p for better diversity
+                    frequency_penalty=0.3,  # Add frequency penalty to avoid repetition
+                    presence_penalty=0.3  # Add presence penalty for more variety
+                )
+                break  # Success, exit retry loop
+            except Exception as e:
+                print(f"⚠️ OpenAI API call attempt {attempt + 1} failed: {str(e)}")
+                if attempt == max_retries - 1:
+                    raise e  # Re-raise on final attempt
+                time.sleep(1)  # Wait before retry
         
         # Parse the response
         response_text = response.choices[0].message.content.strip()
         print(f"🤖 OpenAI Response: {response_text}")
+        print(f"📏 Response length: {len(response_text)} characters")
         
-        # Split by the separator
-        prompts = [prompt.strip() for prompt in response_text.split("|||")]
+        # Split by the separator and clean up
+        raw_prompts = response_text.split("|||")
+        print(f"🔍 Raw split result: {len(raw_prompts)} parts")
+        for i, part in enumerate(raw_prompts):
+            print(f"  Part {i+1}: '{part.strip()}' (length: {len(part.strip())})")
+        
+        prompts = [prompt.strip() for prompt in raw_prompts if prompt.strip()]
+        print(f"✅ Cleaned prompts: {len(prompts)} valid prompts")
         
         # Ensure we have exactly 3 prompts
         if len(prompts) != 3:
             print(f"⚠️ Expected 3 prompts, got {len(prompts)}. Creating fallback prompts.")
+            
+            # If we have some prompts but not 3, try to generate more
+            if len(prompts) > 0:
+                print(f"📝 Found {len(prompts)} valid prompts, generating additional ones...")
+                # Keep existing prompts and generate additional ones
+                existing_prompts = prompts.copy()
+                additional_needed = 3 - len(prompts)
+                
+                # Generate additional prompts using a different approach
+                additional_prompts = []
+                for i in range(additional_needed):
+                    additional_prompts.append(
+                        f"Medium: {'Digital illustration' if i == 0 else 'Watercolor painting' if i == 1 else 'Charcoal drawing'}, "
+                        f"Style: {'Modern artistic with vibrant colors' if i == 0 else 'Impressionistic with flowing brushstrokes' if i == 1 else 'Dramatic black and white with high contrast'}, "
+                        f"Composition: {'Close-up portrait with shallow depth of field' if i == 0 else 'Wide shot capturing the full scene' if i == 1 else 'Medium shot with dynamic angles'}, "
+                        f"Scene Setting: {user_prompt} in a {'contemporary environment with detailed props and settings' if i == 0 else 'natural outdoor setting with rich environmental details' if i == 1 else 'moody, atmospheric environment with detailed textures'}, "
+                        f"Atmosphere: {'Soft, diffused lighting with warm golden tones and gentle shadows' if i == 0 else 'Natural daylight filtering through with gentle shadows and atmospheric perspective' if i == 1 else 'High contrast lighting with deep shadows and dramatic mood'}"
+                    )
+                
+                prompts = existing_prompts + additional_prompts
+            else:
+                # No valid prompts found, create all 3 from scratch
+                prompts = [
+                    f"Medium: Digital illustration, Style: Modern artistic with vibrant colors, Composition: Close-up portrait with shallow depth of field, Scene Setting: {user_prompt} in a contemporary environment with detailed props and settings, Atmosphere: Soft, diffused lighting with warm golden tones and gentle shadows",
+                    f"Medium: Watercolor painting, Style: Impressionistic with flowing brushstrokes, Composition: Wide shot capturing the full scene, Scene Setting: {user_prompt} in a natural outdoor setting with rich environmental details, Atmosphere: Natural daylight filtering through with gentle shadows and atmospheric perspective",
+                    f"Medium: Charcoal drawing, Style: Dramatic black and white with high contrast, Composition: Medium shot with dynamic angles, Scene Setting: {user_prompt} in a moody, atmospheric environment with detailed textures, Atmosphere: High contrast lighting with deep shadows and dramatic mood"
+                ]
+        
+        # Final validation - ensure we have exactly 3 prompts
+        prompts = [prompt.strip() for prompt in prompts if prompt.strip()]
+        
+        # If we still don't have 3 prompts, create them from scratch
+        if len(prompts) != 3:
+            print(f"⚠️ Final validation failed - still have {len(prompts)} prompts. Creating all 3 from scratch.")
             prompts = [
                 f"Medium: Digital illustration, Style: Modern artistic with vibrant colors, Composition: Close-up portrait with shallow depth of field, Scene Setting: {user_prompt} in a contemporary environment with detailed props and settings, Atmosphere: Soft, diffused lighting with warm golden tones and gentle shadows",
                 f"Medium: Watercolor painting, Style: Impressionistic with flowing brushstrokes, Composition: Wide shot capturing the full scene, Scene Setting: {user_prompt} in a natural outdoor setting with rich environmental details, Atmosphere: Natural daylight filtering through with gentle shadows and atmospheric perspective",
                 f"Medium: Charcoal drawing, Style: Dramatic black and white with high contrast, Composition: Medium shot with dynamic angles, Scene Setting: {user_prompt} in a moody, atmospheric environment with detailed textures, Atmosphere: High contrast lighting with deep shadows and dramatic mood"
             ]
         
-        # Clean up prompts
+        # Final cleanup and validation
         prompts = [prompt.strip() for prompt in prompts if prompt.strip()]
+        
+        # Ensure we have exactly 3 prompts
+        if len(prompts) != 3:
+            print(f"❌ CRITICAL ERROR: Still have {len(prompts)} prompts after all attempts!")
+            # This should never happen, but just in case
+            prompts = prompts[:3] if len(prompts) > 3 else prompts + ["Fallback prompt"] * (3 - len(prompts))
         
         print("=" * 80)
         print("🎯 THREE PROMPT VARIATIONS GENERATED:")
