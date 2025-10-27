@@ -31,30 +31,6 @@ load_dotenv()
 # Disable SSL warnings
 warnings.filterwarnings('ignore', message='Unverified HTTPS request')
 
-# Base prompt template for candy packet images
-BASE_PROMPT_TEMPLATE = """Create a high-quality, vibrant, and visually appealing image of a single candy packet from a premium yet affordable candy brand. 
-The image should reflect: {user_input}. 
-Make the packaging look modern, professional, and enticing. Highlight that these candies are better than others in the market while remaining affordable. 
-Use bright, eye-catching colors, detailed textures, and realistic lighting to make the candies irresistible and visually stand out."""
-
-def create_final_prompt(user_input):
-    """Create final prompt by inserting user input into base prompt template
-    
-    Args:
-        user_input (str): User's description of what they want in the image
-        
-    Returns:
-        str: Final prompt with user_input inserted into template
-    """
-    if not user_input or not user_input.strip():
-        # Fallback to default if user input is empty
-        user_input = "attractive candy design with vibrant colors"
-    
-    final_prompt = BASE_PROMPT_TEMPLATE.format(user_input=user_input.strip())
-    print(f"📝 Base Template Used: {BASE_PROMPT_TEMPLATE[:100]}...")
-    print(f"👤 User Input: {user_input.strip()}")
-    print(f"🎯 Final Prompt Created: {final_prompt[:150]}...")
-    return final_prompt
 
 def get_current_user(request):
     """Get current user from JWT token in Authorization header"""
@@ -269,6 +245,248 @@ def generate_enhanced_prompt_with_openai(user_prompt, feedback_data):
         return user_prompt
 
 
+def generate_three_prompts_with_openai(user_prompt, feedback_data=None):
+    """Generate three different prompt variations using OpenAI based on user input and optional feedback
+    
+    Args:
+        user_prompt (str): User's original prompt
+        feedback_data (list): Optional CSV feedback data
+        
+    Returns:
+        list: Three different prompt variations
+    """
+    try:
+        # Get OpenAI API key
+        openai_api_key = os.getenv('OPENAI_API_KEY')
+        
+        if not openai_api_key:
+            print("⚠️ OpenAI API key not found in environment variables")
+            print("💡 Please add OPENAI_API_KEY to your .env file")
+            # Return three variations of the original prompt using Midjourney structure
+            return [
+                f"Photograph, professional style, medium shot of {user_prompt}, natural lighting, clean composition",
+                f"Digital illustration, artistic style, wide shot of {user_prompt}, vibrant colors, detailed atmosphere",
+                f"Oil painting, classical style, close-up of {user_prompt}, dramatic lighting, rich textures"
+            ]
+        
+        print(f"🤖 OpenAI API Key: {'Present' if openai_api_key else 'Missing'}")
+        
+        # Prepare feedback summary if available
+        feedback_summary = ""
+        if feedback_data:
+            feedback_summary = "Based on the following product review feedback:\n"
+            
+            for i, feedback in enumerate(feedback_data[:3]):  # Limit to first 3 entries for prompt generation
+                product_name = feedback.get('Product Name', 'Unknown Product')
+                rating = feedback.get('Rating', 'N/A')
+                review_text_field = feedback.get('Review Text', '')
+                review_title = feedback.get('Review Title', '')
+                
+                feedback_summary += f"\n📦 Review {i+1}:\n"
+                feedback_summary += f"  • Product: {product_name}\n"
+                feedback_summary += f"  • Rating: {rating}/5 stars\n"
+                if review_title:
+                    feedback_summary += f"  • Title: {review_title}\n"
+                if review_text_field:
+                    feedback_summary += f"  • Review: {review_text_field[:150]}...\n"
+        
+        # Create system prompt for generating three variations using Midjourney structure
+        system_prompt = """You are an expert at creating high-quality, detailed image generation prompts using the Midjourney prompt structure. 
+        Based on the user's input, create THREE different comprehensive prompt variations that follow the Midjourney formula:
+        
+        STRUCTURE: Medium, Style, Composition, Scene Setting, Atmosphere
+        
+        Key Elements to include:
+        1. MEDIUM: The artistic medium (photograph, charcoal drawing, watercolor painting, digital illustration, oil painting, etc.)
+        2. STYLE: Visual style (black-and-white, neon cyberpunk, pop art, gothic, vintage, modern, etc.)
+        3. COMPOSITION: Camera framing/angles (wide shot, medium shot, close-up, portrait, aerial view, etc.)
+        4. SCENE SETTING: What the subject is doing, actions, props, and locations
+        5. ATMOSPHERE: Lighting, weather, mood, and additional details that enhance the scene
+        
+        IMPORTANT REQUIREMENTS:
+        - Each prompt should be 50-100 words long with rich, detailed descriptions
+        - Use the user's input as the core subject but expand it significantly
+        - Include specific technical photography terms and artistic details
+        - Add vivid sensory details (colors, textures, lighting, mood)
+        - Use descriptive adjectives and creative language
+        - Make each prompt unique with different approaches and styles
+        
+        For each of the THREE prompts:
+        - Use completely different mediums (e.g., photograph vs charcoal drawing vs watercolor)
+        - Vary the styles dramatically (realistic vs artistic vs abstract)
+        - Change composition angles and perspectives
+        - Create different scene settings and atmospheres
+        - Include specific lighting conditions and mood
+        - Add detailed environmental and contextual elements
+        - Make each prompt comprehensive and visually rich
+        
+        Return ONLY the three detailed prompts, separated by "|||" (three pipe characters).
+        No explanations, just the three comprehensive structured prompts."""
+        
+        user_message = f"""
+        User's original prompt: "{user_prompt}"
+        
+        {feedback_summary}
+        
+        Please create three different, comprehensive prompt variations using the Midjourney structure. Use the following foundational structure as your guide:
+        
+        MIDJOURNEY PROMPT STRUCTURE:
+        This lesson introduces the foundational structure for crafting prompts in Midjourney, helping learners understand how to organize their thoughts to generate desired images. It covers the basic formula for creating prompts and explains how breaking down each element can result in better image outputs.
+
+        Key Elements of a Prompt:
+        Image Prompt (Optional): Use an image as a reference for generating new visuals.
+        Text Prompt: The core focus, consisting of several components that work together to create the desired image.
+
+        Structure: Medium, Style, Composition, Scene Setting, Atmosphere
+
+        Step-by-Step Breakdown:
+        Medium: The type of artistic medium used to generate the image, such as acrylic painting, charcoal drawing, or digital illustration.
+        Style: Describes the visual style, such as black-and-white, neon cyberpunk, or pop art. Certain styles may work better with specific mediums.
+        Composition: Refers to the camera framing or angles, like wide, medium, or close shots. You can also adjust depth of field or change angles.
+        Scene Setting: Defines what the subject is doing in the image, including actions, props, and locations.
+        Atmosphere: Adds further details that complement the scene, such as lighting, weather, or mood.
+
+        For each of the THREE prompts, create comprehensive, detailed descriptions that:
+        - Use the user's input as the core subject but expand it significantly
+        - Include all five elements (Medium, Style, Composition, Scene Setting, Atmosphere)
+        - Make each prompt 50-100 words long with rich, detailed descriptions
+        - Use completely different mediums, styles, and compositions
+        - Add vivid sensory details, technical photography terms, and creative language
+        - Create unique, visually rich prompts that will generate high-quality images
+        """
+        
+        print("🔄 Calling OpenAI API for three prompt variations...")
+        
+        # Initialize OpenAI client
+        client = openai.OpenAI(api_key=openai_api_key)
+        
+        # Call OpenAI API
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message}
+            ],
+            max_tokens=800,
+            temperature=0.8  # Higher temperature for more creative variations
+        )
+        
+        # Parse the response
+        response_text = response.choices[0].message.content.strip()
+        print(f"🤖 OpenAI Response: {response_text}")
+        
+        # Split by the separator
+        prompts = [prompt.strip() for prompt in response_text.split("|||")]
+        
+        # Ensure we have exactly 3 prompts
+        if len(prompts) != 3:
+            print(f"⚠️ Expected 3 prompts, got {len(prompts)}. Creating fallback prompts.")
+            prompts = [
+                f"Medium: Digital illustration, Style: Modern artistic with vibrant colors, Composition: Close-up portrait with shallow depth of field, Scene Setting: {user_prompt} in a contemporary environment with detailed props and settings, Atmosphere: Soft, diffused lighting with warm golden tones and gentle shadows",
+                f"Medium: Watercolor painting, Style: Impressionistic with flowing brushstrokes, Composition: Wide shot capturing the full scene, Scene Setting: {user_prompt} in a natural outdoor setting with rich environmental details, Atmosphere: Natural daylight filtering through with gentle shadows and atmospheric perspective",
+                f"Medium: Charcoal drawing, Style: Dramatic black and white with high contrast, Composition: Medium shot with dynamic angles, Scene Setting: {user_prompt} in a moody, atmospheric environment with detailed textures, Atmosphere: High contrast lighting with deep shadows and dramatic mood"
+            ]
+        
+        # Clean up prompts
+        prompts = [prompt.strip() for prompt in prompts if prompt.strip()]
+        
+        print("=" * 80)
+        print("🎯 THREE PROMPT VARIATIONS GENERATED:")
+        print("=" * 80)
+        for i, prompt in enumerate(prompts, 1):
+            print(f"📝 Prompt {i}: {prompt}")
+        print("=" * 80)
+        
+        return prompts
+        
+    except Exception as e:
+        print(f"❌ Error generating three prompts: {str(e)}")
+        print(f"💡 Falling back to default prompt variations")
+        # Return three variations of the original prompt using Midjourney structure
+        return [
+            f"Photograph, professional style, medium shot of {user_prompt}, natural lighting, clean composition",
+            f"Digital illustration, artistic style, wide shot of {user_prompt}, vibrant colors, detailed atmosphere",
+            f"Oil painting, classical style, close-up of {user_prompt}, dramatic lighting, rich textures"
+        ]
+
+
+class PromptGenerationView(APIView):
+    """Generate three prompt variations using OpenAI"""
+    
+    def post(self, request):
+        """Generate three different prompt variations based on user input"""
+        try:
+            # Get current user from JWT token
+            user = get_current_user(request)
+            if not user:
+                return Response(
+                    ResponseInfo.error("Authentication required"),
+                    status=status.HTTP_401_UNAUTHORIZED
+                )
+            
+            # Extract data from request
+            prompt = request.data.get('prompt', '').strip()
+            
+            # Validate required fields
+            if not prompt:
+                return Response(
+                    ResponseInfo.error("Prompt is required for prompt generation"),
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Check for reference images or CSV files - prompt generation should only work without them
+            has_reference_images = any(key.startswith('reference_image_') for key in request.FILES.keys())
+            has_csv_feedback = any(key == 'csv_feedback' for key in request.FILES.keys())
+            
+            if has_reference_images or has_csv_feedback:
+                return Response(
+                    ResponseInfo.error("Prompt generation is only available when no reference images or CSV files are provided"),
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Process CSV feedback file if provided (this should not happen based on check above, but keeping for safety)
+            feedback_data = []
+            csv_file = None
+            print(f"🔍 Checking for CSV files in request.FILES: {list(request.FILES.keys())}")
+            
+            for key, file in request.FILES.items():
+                print(f"📁 Found file: {key}, Content-Type: {file.content_type}, Size: {file.size}")
+                if key == 'csv_feedback' and (file.content_type == 'text/csv' or file.content_type == 'text/plain' or file.name.endswith('.csv') or file.name.endswith('.txt')):
+                    try:
+                        csv_file = file
+                        print(f"✅ CSV file detected: {file.name}")
+                        feedback_data = process_csv_feedback(file)
+                        print(f"📊 Processed CSV feedback with {len(feedback_data)} entries")
+                    except Exception as e:
+                        print(f"❌ Error processing CSV feedback: {str(e)}")
+                        continue
+                elif key == 'csv_feedback':
+                    print(f"⚠️ CSV file found but wrong content type: {file.content_type}")
+            
+            # Generate three prompt variations using OpenAI
+            print("🤖 Generating three prompt variations with OpenAI...")
+            prompt_variations = generate_three_prompts_with_openai(prompt, feedback_data)
+            
+            response_data = {
+                "original_prompt": prompt,
+                "prompt_variations": prompt_variations,
+                "feedback_used": len(feedback_data) > 0,
+                "feedback_entries": len(feedback_data)
+            }
+            
+            return Response(
+                ResponseInfo.success(response_data, "Three prompt variations generated successfully"),
+                status=status.HTTP_200_OK
+            )
+            
+        except Exception as e:
+            print(f"❌ Error generating prompt variations: {str(e)}")
+            return Response(
+                ResponseInfo.error(f"Failed to generate prompt variations: {str(e)}"),
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
 class ImageGenerationView(APIView):
     parser_classes = [MultiPartParser, FormParser]
     
@@ -352,14 +570,14 @@ class ImageGenerationView(APIView):
                 print(f"🎯 FINAL ENHANCED PROMPT FOR IMAGE GENERATION: {final_prompt}")
             elif reference_images:
                 # Reference images provided - use original prompt as-is
-                print("🖼️  Reference images detected - Using original user prompt without base template")
+                print("🖼️  Reference images detected - Using original user prompt")
                 print(f"📸 Number of reference images: {len(reference_images)}")
                 final_prompt = prompt
                 print(f"🎯 FINAL PROMPT FOR IMAGE GENERATION: {final_prompt}")
             else:
-                # No reference images and no CSV - use base template with user input
-                print("📝 No reference images or CSV feedback - Using base template with user input")
-                final_prompt = create_final_prompt(prompt)
+                # No reference images and no CSV - use original prompt as-is
+                print("📝 No reference images or CSV feedback - Using original user prompt")
+                final_prompt = prompt
                 print(f"🎯 FINAL PROMPT FOR IMAGE GENERATION: {final_prompt}")
             
             # Create job in database
