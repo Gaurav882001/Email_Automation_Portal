@@ -61,3 +61,15 @@ class VideoGenerationJob(models.Model):
 
     def __str__(self):
         return f"Video Job {self.job_id} - {self.status} - User: {self.user.email if self.user else 'No User'}"
+
+
+class VideoReferenceImage(models.Model):
+    job = models.ForeignKey(VideoGenerationJob, on_delete=models.CASCADE, related_name='reference_images')
+    image_data = models.TextField()  # Base64 encoded image data
+    filename = models.CharField(max_length=255)
+    content_type = models.CharField(max_length=100)
+    reference_type = models.CharField(max_length=50, default='asset')  # 'asset' or other types
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Reference image for {self.job.job_id}"

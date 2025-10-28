@@ -2,7 +2,7 @@ from django.urls import path
 from rest_framework.decorators import api_view
 
 from .views import auth_view, general_view
-from .views.image_generation_view import ImageGenerationView, ImageStatusView, JobListView, RetryJobView, DeleteJobView, DashboardStatsView, PromptGenerationView
+from .views.image_generation_view import ImageGenerationView, ImageStatusView, JobListView, RetryJobView, DeleteJobView, DashboardStatsView, PromptGenerationView, RefinePromptView
 from .views.video_generation_view import VideoGenerationView, VideoStatusView, VideoJobListView, VideoRetryJobView, VideoDeleteJobView, VideoDashboardStatsView
 
 urlpatterns = [
@@ -21,6 +21,7 @@ urlpatterns = [
 
     # Prompt generation
     path('generate-prompts/', PromptGenerationView.as_view(), name='generate-prompts'),
+    path('refine-prompt/', RefinePromptView.as_view(), name='refine-prompt'),
     
     # Async Image generation with Nano Banana
     path('generate-image/', ImageGenerationView.as_view(), name='generate-image'),
