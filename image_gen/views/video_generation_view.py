@@ -3,6 +3,8 @@ import uuid
 import time
 import threading
 import warnings
+import base64
+import tempfile
 from datetime import datetime
 from django.conf import settings
 from django.core.files.storage import default_storage
@@ -14,10 +16,12 @@ from rest_framework.parsers import MultiPartParser, FormParser
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
+from PIL import Image
+from io import BytesIO
 
 from utils.response import ResponseInfo
 from utils.jwt_utils import verify_jwt_token
-from image_gen.models import VideoGenerationJob
+from image_gen.models import VideoGenerationJob, VideoReferenceImage
 from image_gen.db_models.user import Users
 
 # Load environment variables
@@ -47,7 +51,7 @@ def get_current_user(request):
 
 
 def generate_video_with_veo(job_id, prompt, duration):
-    """Generate video using Google Veo 3.1 API"""
+    """Generate video using Google Veo 3.1 API with optional reference images"""
     try:
         # Get API key from environment
         gemini_api_key = os.getenv('NANO_BANANA_API_KEY')  # Using same key as image generation
@@ -69,19 +73,120 @@ def generate_video_with_veo(job_id, prompt, duration):
         job.progress = 10
         job.save()
         
+        # Get reference images if any
+        reference_images = VideoReferenceImage.objects.filter(job=job)
+        ref_count = reference_images.count()
+        print(f"📸 Reference images count: {ref_count}/3 (max allowed by Veo 3.1)")
+        
+        # Validate reference image count
+        if ref_count > 3:
+            raise Exception(f"Too many reference images ({ref_count}). Veo 3.1 supports maximum 3 reference images.")
+        
+        # Prepare reference images list for video generation config
+        reference_image_objects = []
+        
+        # Process reference images if provided
+        if reference_images.exists():
+            print("🖼️ Processing and uploading reference images...")
+            
+            for idx, ref_img in enumerate(reference_images, 1):
+                try:
+                    print(f"  📸 Processing reference image {idx}: {ref_img.filename}")
+                    
+                    # Decode base64 image data
+                    try:
+                        image_data_bytes = base64.b64decode(ref_img.image_data)
+                        print(f"     - Decoded image data size: {len(image_data_bytes)} bytes")
+                    except Exception as decode_error:
+                        print(f"     - Base64 decode error: {str(decode_error)}")
+                        print(f"     - Image data length: {len(ref_img.image_data) if ref_img.image_data else 0}")
+                        print(f"     - First 100 chars of image_data: {ref_img.image_data[:100] if ref_img.image_data else 'None'}")
+                        raise Exception(f"Failed to decode base64 image data: {str(decode_error)}")
+                    
+                    # Load image with PIL
+                    try:
+                        pil_image = Image.open(BytesIO(image_data_bytes))
+                    except Exception as pil_error:
+                        print(f"     - PIL open error: {str(pil_error)}")
+                        print(f"     - Decoded bytes first 20: {image_data_bytes[:20]}")
+                        raise Exception(f"Failed to open image with PIL: {str(pil_error)}")
+                    
+                    # Convert to RGB mode if necessary
+                    if pil_image.mode not in ('RGB', 'RGBA'):
+                        print(f"     - Converting from {pil_image.mode} to RGB mode")
+                        pil_image = pil_image.convert('RGB')
+                    
+                    print(f"     - Size: {pil_image.size}, Mode: {pil_image.mode}")
+                    
+                    # Convert image to JPEG bytes for Veo 3.1
+                    output = BytesIO()
+                    if pil_image.mode == 'RGBA':
+                        # Convert RGBA to RGB for JPEG
+                        rgb_image = Image.new('RGB', pil_image.size, (255, 255, 255))
+                        rgb_image.paste(pil_image, mask=pil_image.split()[3])
+                        rgb_image.save(output, format='JPEG', quality=95)
+                    else:
+                        pil_image.save(output, format='JPEG', quality=95)
+                    
+                    # Get the JPEG bytes
+                    jpeg_bytes = output.getvalue()
+                    
+                    print(f"     - Converted to JPEG (size: {len(jpeg_bytes)} bytes)")
+                    
+                    # Create Image object with raw bytes (not base64)
+                    # The types.Image expects raw bytes, not base64 encoded
+                    image_obj = types.Image(
+                        image_bytes=jpeg_bytes,
+                        mime_type="image/jpeg"
+                    )
+                    
+                    # Create VideoGenerationReferenceImage object
+                    ref_image_obj = types.VideoGenerationReferenceImage(
+                        image=image_obj,
+                        reference_type=ref_img.reference_type
+                    )
+                    reference_image_objects.append(ref_image_obj)
+                    print(f"  ✓ Added reference image {idx}: {ref_img.filename}")
+                    
+                except Exception as img_error:
+                    print(f"  ❌ Error processing reference image {ref_img.filename}: {str(img_error)}")
+                    import traceback
+                    print(f"     Traceback: {traceback.format_exc()}")
+                    raise Exception(f"Failed to process reference image {ref_img.filename}: {str(img_error)}")
+            
+            print(f"✅ All {ref_count} reference images uploaded successfully")
+        
         # Generate video using Veo 3.1
-        operation = client.models.generate_videos(
-            model="veo-3.1-generate-preview",
-            prompt=prompt,
-        )
+        print(f"🎬 Calling Veo 3.1 API...")
+        if reference_images.exists():
+            print(f"   - Reference images: {ref_count}")
+            print(f"   - Prompt: {prompt[:100]}...")
+            
+            # Generate with reference images using config with correct parameter name
+            operation = client.models.generate_videos(
+                model="veo-3.1-generate-preview",
+                prompt=prompt,
+                config=types.GenerateVideosConfig(
+                    reference_images=reference_image_objects  # Use plural 'reference_images'
+                )
+            )
+        else:
+            print(f"   - Prompt only: {prompt[:100]}...")
+            
+            # Generate with prompt only
+            operation = client.models.generate_videos(
+                model="veo-3.1-generate-preview",
+                prompt=prompt,
+            )
         
         # Update progress
         job.progress = 30
         job.save()
         
         # Poll the operation status until the video is ready
+        print(f"⏳ Waiting for video generation to complete...")
         while not operation.done:
-            print(f"Waiting for video generation to complete for job {job_id}...")
+            print(f"   - Still processing... (progress: {job.progress}%)")
             time.sleep(10)
             operation = client.operations.get(operation)
             
@@ -94,14 +199,34 @@ def generate_video_with_veo(job_id, prompt, duration):
         job.progress = 90
         job.save()
         
+        print(f"✅ Video generation completed, downloading...")
+        
+        # Check if operation has response and generated_videos
+        if not operation.response:
+            raise Exception("No response from video generation operation")
+        
+        if not hasattr(operation.response, 'generated_videos') or not operation.response.generated_videos:
+            # Log the response structure for debugging
+            print(f"⚠️ Response structure: {dir(operation.response)}")
+            print(f"⚠️ Response content: {operation.response}")
+            raise Exception("No generated videos in response")
+        
         # Download the generated video
         generated_video = operation.response.generated_videos[0]
+        print(f"📹 Generated video object: {generated_video}")
         
         # Create filename for the video
         video_filename = f"video_{job_id}_{int(time.time())}.mp4"
         
         # Download video content
-        video_content = client.files.download(file=generated_video.video)
+        if hasattr(generated_video, 'video'):
+            video_content = client.files.download(file=generated_video.video)
+        elif hasattr(generated_video, 'uri'):
+            # Alternative: download from URI
+            video_content = client.files.download(name=generated_video.uri)
+        else:
+            print(f"⚠️ Video object structure: {dir(generated_video)}")
+            raise Exception(f"Cannot find video content in generated_video object")
         
         # Save video to media directory
         video_path = f"generated_videos/{video_filename}"
@@ -114,6 +239,8 @@ def generate_video_with_veo(job_id, prompt, duration):
         with open(full_path, 'wb') as f:
             f.write(video_content)
         
+        print(f"💾 Video saved: {video_path} (size: {len(video_content)} bytes)")
+        
         # Update job with completion details
         job.status = 'completed'
         job.completed_at = datetime.now()
@@ -122,10 +249,12 @@ def generate_video_with_veo(job_id, prompt, duration):
         job.video_url = f"{settings.MEDIA_URL}{video_path}"
         job.save()
         
-        print(f"Video generation completed for job {job_id}")
+        print(f"✅ Video generation completed successfully for job {job_id}")
         
     except Exception as e:
-        print(f"Error generating video for job {job_id}: {str(e)}")
+        print(f"❌ Error generating video for job {job_id}: {str(e)}")
+        import traceback
+        print(f"📋 Full traceback: {traceback.format_exc()}")
         
         # Update job with error
         job = VideoGenerationJob.objects.get(job_id=job_id)
@@ -180,6 +309,60 @@ class VideoGenerationView(APIView):
             )
             
             print(f"✅ Video job created with ID: {job.job_id}")
+            
+            # Process reference images if provided
+            reference_image_count = 0
+            reference_image_keys = [key for key in request.FILES.keys() if key.startswith('reference_image_')]
+            
+            # Validate reference image count (Veo 3.1 supports max 3 reference images)
+            if len(reference_image_keys) > 3:
+                print(f"❌ Too many reference images: {len(reference_image_keys)}. Maximum is 3.")
+                job.delete()  # Clean up the created job
+                return Response(
+                    ResponseInfo.error("Maximum 3 reference images allowed for video generation"),
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            for key in reference_image_keys:
+                reference_image_count += 1
+                image_file = request.FILES[key]
+                
+                # Read and encode image
+                image_data = image_file.read()
+                
+                # Validate that it's a valid image before storing
+                try:
+                    test_image = Image.open(BytesIO(image_data))
+                    test_image.verify()  # Verify it's a valid image
+                    print(f"  ✓ Validated image: {image_file.name} ({test_image.format}, {test_image.size})")
+                except Exception as validation_error:
+                    print(f"  ❌ Invalid image file {image_file.name}: {str(validation_error)}")
+                    job.delete()  # Clean up the created job
+                    return Response(
+                        ResponseInfo.error(f"Invalid image file '{image_file.name}': {str(validation_error)}"),
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                
+                # Re-read the file since verify() consumed it
+                image_file.seek(0)
+                image_data = image_file.read()
+                
+                image_base64 = base64.b64encode(image_data).decode('utf-8')
+                
+                # Store reference image
+                VideoReferenceImage.objects.create(
+                    job=job,
+                    image_data=image_base64,
+                    filename=image_file.name,
+                    content_type=image_file.content_type,
+                    reference_type='asset'  # Default to 'asset' as per Google's example
+                )
+                print(f"  📸 Stored reference image {reference_image_count}/3: {image_file.name}")
+            
+            if reference_image_count > 0:
+                print(f"✅ {reference_image_count} reference images stored for job {job.job_id} (max 3 allowed)")
+            else:
+                print(f"ℹ️ No reference images provided for job {job.job_id}")
             
             # Start video generation in background thread
             thread = threading.Thread(

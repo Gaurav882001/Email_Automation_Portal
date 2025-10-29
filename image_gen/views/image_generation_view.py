@@ -273,23 +273,23 @@ def generate_three_prompts_with_openai(user_prompt, feedback_data=None):
         print(f"🤖 OpenAI API Key: {'Present' if openai_api_key else 'Missing'}")
         
         # Prepare feedback summary if available
-        feedback_summary = ""
-        if feedback_data:
-            feedback_summary = "Based on the following product review feedback:\n"
+        # feedback_summary = ""
+        # if feedback_data:
+        #     feedback_summary = "Based on the following product review feedback:\n"
             
-            for i, feedback in enumerate(feedback_data[:3]):  # Limit to first 3 entries for prompt generation
-                product_name = feedback.get('Product Name', 'Unknown Product')
-                rating = feedback.get('Rating', 'N/A')
-                review_text_field = feedback.get('Review Text', '')
-                review_title = feedback.get('Review Title', '')
+        #     for i, feedback in enumerate(feedback_data[:3]):  # Limit to first 3 entries for prompt generation
+        #         product_name = feedback.get('Product Name', 'Unknown Product')
+        #         rating = feedback.get('Rating', 'N/A')
+        #         review_text_field = feedback.get('Review Text', '')
+        #         review_title = feedback.get('Review Title', '')
                 
-                feedback_summary += f"\n📦 Review {i+1}:\n"
-                feedback_summary += f"  • Product: {product_name}\n"
-                feedback_summary += f"  • Rating: {rating}/5 stars\n"
-                if review_title:
-                    feedback_summary += f"  • Title: {review_title}\n"
-                if review_text_field:
-                    feedback_summary += f"  • Review: {review_text_field[:150]}...\n"
+        #         feedback_summary += f"\n📦 Review {i+1}:\n"
+        #         feedback_summary += f"  • Product: {product_name}\n"
+        #         feedback_summary += f"  • Rating: {rating}/5 stars\n"
+        #         if review_title:
+        #             feedback_summary += f"  • Title: {review_title}\n"
+        #         if review_text_field:
+        #             feedback_summary += f"  • Review: {review_text_field[:150]}...\n"
         
         # Create system prompt for generating three variations using Midjourney structure
 
@@ -404,15 +404,19 @@ def generate_three_prompts_with_openai(user_prompt, feedback_data=None):
 
         IMPORTANT: Do NOT change, modify, substitute, or suggest alternatives for ANY user-specified element. Only elaborate and create variations for elements NOT specified by the user.
 
-        IMPORTANT REQUIREMENTS:
-        - Each prompt should be 50-100 words long with rich, detailed descriptions
-        - Use the user's input as the core subject and preserve ALL user-specified elements
-        - Only vary and elaborate on elements NOT specified by the user
-        - Include specific technical terms and artistic details
-        - Add vivid sensory details (colors, textures, lighting, mood)
-        - Use descriptive adjectives and creative language
-        - Make each prompt unique by varying only the non-specified elements
-        - Not all elements need to be used in every prompt - only include relevant ones
+        IMPORTANT REQUIREMENTS FOR DETAILED PROMPTS:
+        - Each prompt MUST be 50-120 words long with VERY rich, detailed descriptions
+        - Use the user's input as the core subject and SIGNIFICANTLY EXPAND upon it
+        - Preserve ALL user-specified elements while adding extensive elaboration
+        - Include MULTIPLE specific technical terms, artistic details, and photography terminology
+        - Add VIVID sensory details: specific colors (not just "blue" but "deep cobalt blue", "warm amber"), detailed textures (rough canvas, smooth silk, weathered leather), precise lighting descriptions
+        - Use HIGHLY descriptive adjectives and creative language throughout
+        - Describe the scene with cinematic detail: foreground, midground, background elements
+        - Add environmental context: time of day, weather conditions, surrounding atmosphere
+        - Include subject details: clothing, expressions, poses, interactions
+        - Specify materials, surfaces, and physical properties
+        - Add emotional and mood descriptors
+        - Include technical camera/art specifications when relevant
 
         For each of the THREE prompts:
         - PRESERVE all user-specified elements across all three prompts
@@ -441,133 +445,53 @@ def generate_three_prompts_with_openai(user_prompt, feedback_data=None):
         user_message = f"""
         User's original prompt: "{user_prompt}"
 
-        {feedback_summary}
-
-        🚨 CRITICAL FIRST STEP - ANALYZE USER'S PROMPT FOR ALL ELEMENTS 🚨
         
-        BEFORE generating any prompts, you MUST:
-        1. Read the user's prompt carefully
-        2. Identify ANY specific elements mentioned (wide frame, caricature, fashion, watercolor, etc.)
-        3. PRESERVE these elements EXACTLY in ALL THREE prompts
-        4. Do NOT change, substitute, or modify user-specified elements
-        
-        Scan the user's prompt for ANY of these keywords:
-        - Illustration Type: cartoon, anime, line art, fantasy, caricature, fashion illustration, etc.
-        - Photography Style: portrait, landscape, double exposure, black and white, high angle, low angle, etc.
-        - Vibes & Moods: cyberpunk, dark academia, steampunk, americana, horrorcore, calm, romantic, etc.
-        - Artistic Technique: watercolor, oil painting, charcoal, pencil, impressionism, surrealism, etc.
-        - Composition: close-up, wide shot, rule of thirds, aerial view, etc.
-        - Atmosphere: golden hour, dramatic shadows, neon glow, foggy, etc.
-
-        ⚠️ MANDATORY RULE: Whatever element the user specified MUST appear in ALL THREE prompts without change or substitution!
-        
-        CRITICAL EXAMPLES:
-        - If user says "wide frame" → use "wide shot" or "wide frame" in ALL three prompts (NOT "medium shot" or "close-up")
-        - If user says "caricature" → use "caricature" in ALL three prompts (NOT "realistic" or "cartoon")
-        - If user says "fashion" → use "fashion illustration" in ALL three prompts (NOT "portrait" or "lifestyle")
-        - If user says "watercolor" → use "watercolor painting" in ALL three prompts (NOT "oil painting" or "digital art")
-
-        Please create three different, comprehensive prompt variations using the Midjourney structure:
-
-        STRUCTURE: Medium, Style, [Illustration Type/Photography Style/Vibes & Moods/Artistic Technique as applicable], Composition, Scene Setting, Atmosphere
-
-        For each of the THREE prompts:
-        - FIRST identify and preserve ALL user-specified elements
-        - Include relevant elements (not all 9 are needed for every prompt)
-        - Make each prompt 50-100 words long with rich, detailed descriptions
-        - Only vary the elements that the user did NOT explicitly specify
-        - Add vivid sensory details and technical terms
-        - Create unique, visually rich prompts that respect ALL user specifications
-
-        EXAMPLES OF CORRECT PRESERVATION:
-        • User: "wide frame cartoon poster of animals" → Composition: Wide shot + Illustration Type: Cartoon (in ALL 3 prompts)
-        • User: "caricature portrait" → Illustration Type: Caricature + Composition: Portrait (in ALL 3 prompts)
-        • User: "fashion illustration close-up" → Illustration Type: Fashion illustration + Composition: Close-up (in ALL 3 prompts)
-        • User: "watercolor landscape" → Artistic Technique: Watercolor painting (in ALL 3 prompts)
-        • User: "cyberpunk high angle street" → Vibes & Moods: Cyberpunk + Composition: High angle (in ALL 3 prompts)
-        • User: "golden hour portrait" → Atmosphere: Golden hour lighting (in ALL 3 prompts)
-        • User: "anime character close-up" → Illustration Type: Anime + Composition: Close-up (in ALL 3 prompts)
-        
-        ⚠️ FINAL REMINDER: If the user specifies ANY element (like "wide frame", "caricature", "fashion"), you MUST include that exact element in ALL THREE prompts. Do NOT change it to something else!
+        YOUR PROMPTS MUST BE THIS DETAILED! Expand every element with rich, specific descriptions!
         """
-
-
-
-        # system_prompt = """You are an expert at creating high-quality, detailed image generation prompts using the Midjourney prompt structure. 
-        # Based on the user's input, create THREE different comprehensive prompt variations that follow the Midjourney formula:
         
-        # STRUCTURE: Medium, Style, Composition, Scene Setting, Atmosphere
+        # Merge system prompt and user message into a comprehensive single prompt
+        merged_prompt = f"""{system_prompt}
         
-        # Key Elements to include:
-        # 1. MEDIUM: The artistic medium (photograph, charcoal drawing, watercolor painting, digital illustration, oil painting, etc.)
-        # 2. STYLE: Visual style (black-and-white, neon cyberpunk, pop art, gothic, vintage, modern, etc.)
-        # 3. COMPOSITION: Camera framing/angles (wide shot, medium shot, close-up, portrait, aerial view, etc.)
-        # 4. SCENE SETTING: What the subject is doing, actions, props, and locations
-        # 5. ATMOSPHERE: Lighting, weather, mood, and additional details that enhance the scene
+        ==================================================================================
+        USER'S ORIGINAL INPUT TO EXPAND:
+        ==================================================================================
         
-        # IMPORTANT REQUIREMENTS:
-        # - Each prompt should be 50-100 words long with rich, detailed descriptions
-        # - Use the user's input as the core subject but expand it significantly
-        # - Include specific technical photography terms and artistic details
-        # - Add vivid sensory details (colors, textures, lighting, mood)
-        # - Use descriptive adjectives and creative language
-        # - Make each prompt unique with different approaches and styles
+        {user_message}
         
-        # For each of the THREE prompts:
-        # - Use completely different mediums (e.g., photograph vs charcoal drawing vs watercolor)
-        # - Vary the styles dramatically (realistic vs artistic vs abstract)
-        # - Change composition angles and perspectives
-        # - Create different scene settings and atmospheres
-        # - Include specific lighting conditions and mood
-        # - Add detailed environmental and contextual elements
-        # - Make each prompt comprehensive and visually rich
+        ==================================================================================
+        FINAL INSTRUCTIONS:
+        ==================================================================================
         
-        # CRITICAL FORMAT REQUIREMENTS:
-        # - Return EXACTLY 3 prompts
-        # - Separate each prompt with "|||" (three pipe characters)
-        # - Each prompt must be on a single line
-        # - No explanations, no numbering, no additional text
-        # - No line breaks within prompts
-        # - Just the three comprehensive structured prompts separated by "|||"
+        Based on the user's prompt "{user_prompt}", create THREE highly detailed, comprehensive prompt variations.
         
-        # MANDATORY FORMAT (follow this exactly):
-        # Medium: [medium type], Style: [style description], Composition: [composition type], Scene Setting: [detailed scene description], Atmosphere: [lighting and mood details]|||Medium: [different medium type], Style: [different style description], Composition: [different composition type], Scene Setting: [different detailed scene description], Atmosphere: [different lighting and mood details]|||Medium: [third medium type], Style: [third style description], Composition: [third composition type], Scene Setting: [third detailed scene description], Atmosphere: [third lighting and mood details]
+        Each variation MUST:
+        1. Be 50-120 words long with EXTENSIVE descriptive detail
+        2. PRESERVE all user-specified elements (style, composition, mood, technique, etc.)
+        3. SIGNIFICANTLY EXPAND the user's concept with:
+           - Specific colors (deep cobalt blue, warm amber, crimson red, etc.)
+           - Detailed textures (rough canvas, smooth silk, weathered leather, etc.)
+           - Precise lighting (soft diffused backlight, dramatic rim lighting, etc.)
+           - Environmental context (time of day, weather, atmosphere, surroundings)
+           - Subject details (clothing, expressions, poses, interactions, accessories)
+           - Materials and surfaces (brushed metal, polished marble, aged wood, etc.)
+           - Emotional descriptors (serene, energetic, melancholic, etc.)
+           - Technical specs (shallow depth of field, f/1.8, 85mm lens, etc.)
+           - Foreground, midground, and background elements
         
-        # Remember: Use "|||" to separate the three prompts, nothing else!"""
+        Return ONLY the three detailed prompts separated by "|||" (three pipe characters).
+        No explanations, just the three comprehensive prompts.
         
-        # user_message = f"""
-        # User's original prompt: "{user_prompt}"
+        CRITICAL: Each prompt MUST be AT LEAST 80 words with rich, elaborate descriptions. Think like a professional photographer or artist describing their vision in extreme detail. Do NOT give short, simple prompts!
         
-        # {feedback_summary}
+        Example detail level needed:
+        Instead of: "Charcoal drawing of a boy eating sweets"
+        You must write: "Medium: Charcoal drawing executed with soft blending techniques and rich tonal variations across the entire composition, Style: Realistic with expressive mark-making and dramatic high-contrast areas, Illustration Type: Traditional realistic illustration capturing delicate textures and subtle emotional nuances in every stroke, Composition: Medium shot framed at eye level with shallow depth of field technique, placing the young boy as the central focal point against a softly blurred atmospheric background, Scene Setting: A cheerful 8-year-old boy with tousled dark hair and bright sparkling eyes, wearing a casual striped cotton t-shirt, joyfully savoring an assortment of colorful wrapped candies and rich chocolate treats, his small fingers delicately holding a vibrant red lollipop while his expression radiates pure delight and innocent childhood happiness, Atmosphere: Soft diffused natural window light streaming in from the left creating gentle shadows on his face, warm afternoon glow illuminating the scene with a cozy nostalgic mood, capturing the timeless joy of childhood indulgence in a tender heartwarming moment"
         
-        # Please create three different, comprehensive prompt variations using the Midjourney structure. Use the following foundational structure as your guide:
-        
-        # MIDJOURNEY PROMPT STRUCTURE:
-        # This lesson introduces the foundational structure for crafting prompts in Midjourney, helping learners understand how to organize their thoughts to generate desired images. It covers the basic formula for creating prompts and explains how breaking down each element can result in better image outputs.
-
-        # Key Elements of a Prompt:
-        # Image Prompt (Optional): Use an image as a reference for generating new visuals.
-        # Text Prompt: The core focus, consisting of several components that work together to create the desired image.
-
-        # Structure: Medium, Style, Composition, Scene Setting, Atmosphere
-
-        # Step-by-Step Breakdown:
-        # Medium: The type of artistic medium used to generate the image, such as acrylic painting, charcoal drawing, or digital illustration.
-        # Style: Describes the visual style, such as black-and-white, neon cyberpunk, or pop art. Certain styles may work better with specific mediums.
-        # Composition: Refers to the camera framing or angles, like wide, medium, or close shots. You can also adjust depth of field or change angles.
-        # Scene Setting: Defines what the subject is doing in the image, including actions, props, and locations.
-        # Atmosphere: Adds further details that complement the scene, such as lighting, weather, or mood.
-
-        # For each of the THREE prompts, create comprehensive, detailed descriptions that:
-        # - Use the user's input as the core subject but expand it significantly
-        # - Include all five elements (Medium, Style, Composition, Scene Setting, Atmosphere)
-        # - Make each prompt 50-100 words long with rich, detailed descriptions
-        # - Use completely different mediums, styles, and compositions
-        # - Add vivid sensory details, technical photography terms, and creative language
-        # - Create unique, visually rich prompts that will generate high-quality images
-        # """
+        NOW CREATE THE THREE PROMPTS:
+        """
         
         print("🔄 Calling OpenAI API for three prompt variations...")
+        print(f"📝 Merged prompt length: {len(merged_prompt)} characters")
         
         # Initialize OpenAI client
         client = openai.OpenAI(api_key=openai_api_key)
@@ -576,18 +500,17 @@ def generate_three_prompts_with_openai(user_prompt, feedback_data=None):
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                # Call OpenAI API
+                # Call OpenAI API with merged prompt
                 response = client.chat.completions.create(
                     model="gpt-3.5-turbo",
                     messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_message}
+                        {"role": "user", "content": merged_prompt}
                     ],
-                    max_tokens=1000,  # Increased token limit
-                    temperature=0.8,  # Higher temperature for more creative variations
-                    top_p=0.9,  # Add top_p for better diversity
-                    frequency_penalty=0.3,  # Add frequency penalty to avoid repetition
-                    presence_penalty=0.3  # Add presence penalty for more variety
+                    max_tokens=1800,  # Further increased for more detailed prompts
+                    temperature=0.9,  # Higher temperature for more creative and detailed variations
+                    top_p=0.95,  # Keep high for diversity
+                    frequency_penalty=0.1,  # Lower to allow natural repetition of important details
+                    presence_penalty=0.5  # Higher to encourage varied vocabulary
                 )
                 break  # Success, exit retry loop
             except Exception as e:
@@ -682,6 +605,127 @@ def generate_three_prompts_with_openai(user_prompt, feedback_data=None):
         ]
 
 
+def refine_prompt_with_openai(base_prompt, additional_details):
+    """Refine a selected prompt with additional user details using OpenAI
+    
+    Args:
+        base_prompt (str): The base prompt selected by user
+        additional_details (str): Additional details provided by user
+        
+    Returns:
+        str: A more detailed, refined prompt
+    """
+    try:
+        # Get OpenAI API key
+        openai_api_key = os.getenv('OPENAI_API_KEY')
+        
+        if not openai_api_key:
+            print("⚠️ OpenAI API key not found - returning combined prompt")
+            return f"{base_prompt}. Additional details: {additional_details}"
+        
+        print("🔄 Refining prompt with OpenAI...")
+        print(f"📝 Base prompt length: {len(base_prompt)} characters")
+        print(f"➕ Additional details length: {len(additional_details)} characters")
+        
+        # Initialize OpenAI client
+        client = openai.OpenAI(api_key=openai_api_key)
+        
+        # Create a comprehensive refinement prompt
+        refinement_prompt = f"""You are an expert at refining and enhancing image generation prompts for professional-grade AI image generation.
+
+        BASE PROMPT (already detailed):
+        {base_prompt}
+
+        ADDITIONAL USER DETAILS TO INCORPORATE:
+        {additional_details}
+
+        YOUR TASK:
+        Create ONE extremely detailed, refined prompt that intelligently merges the base prompt with the additional details.
+
+        CRITICAL RULES:
+
+        1. **STYLE ELEMENT REPLACEMENT**: If the additional details specify photographic/artistic styles (medium, mood, illustration type, lighting, atmosphere, composition, framing, etc.), REPLACE the corresponding elements in the base prompt with the user's specification. Do NOT keep both versions.
+
+        Examples:
+        - If base has "realistic photography" and user adds "cartoon style" → Use "cartoon style"
+        - If base has "warm lighting" and user adds "cool blue tones" → Use "cool blue tones"
+        - If base has "wide shot" and user adds "close-up portrait" → Use "close-up portrait"
+        - If base has "cheerful mood" and user adds "melancholic atmosphere" → Use "melancholic atmosphere"
+
+        2. **ADDITIVE ELEMENTS**: If the additional details add NEW elements (objects, colors, specific details, textures, characters, settings) that don't contradict the base, seamlessly integrate them.
+
+        Examples:
+        - Base: "boy eating sweets" + Additional: "add vintage bicycle in background" → Include both
+        - Base: "sunset scene" + Additional: "add flying birds" → Include both
+
+        3. **LENGTH & DETAIL**: The refined prompt MUST be 250-300 words. Expand every element with:
+        - Specific technical details (aperture, focal length, rendering style)
+        - Rich color descriptions (hex values, gradients, color theory terms)
+        - Texture and material specifications
+        - Precise lighting descriptions (direction, quality, color temperature)
+        - Detailed atmosphere and mood descriptors
+        - Camera angles and perspective details
+
+        4. **STRUCTURE**: Maintain the professional Midjourney structure:
+        Medium → Style → Illustration Type → Composition → Scene Setting → Atmosphere → Photography → VIBES AND MOOD → ARTISTIC TECHNIQUES
+
+        5. **PROFESSIONAL LANGUAGE**: Use photography, cinematography, and art terminology. Be specific and technical.
+
+        EXAMPLE OF DETAIL LEVEL NEEDED:
+        "Medium: Ultra-high resolution digital photography captured with professional DSLR using 85mm f/1.4 prime lens with creamy bokeh effect, Style: Cinematic realism with film noir aesthetic incorporating dramatic chiaroscuro lighting techniques and desaturated color grading with selective color pops, Illustration Type: Photorealistic with meticulous attention to micro-details in skin texture pores and fabric weave patterns, Composition: Intimate close-up portrait framed at eye level using rule of thirds with subject positioned in left third creating dynamic negative space, shallow depth of field at f/1.8 creating silky smooth background separation, Scene Setting: A contemplative 25-year-old woman with flowing auburn hair catching golden hour sunlight, wearing a vintage cream linen dress with delicate lace details, holding a weathered leather-bound journal, surrounded by soft-focused wildflowers in warm amber and lavender tones, Atmosphere: Dreamy nostalgic ambiance bathed in warm diffused natural sunset light streaming from camera left at 45-degree angle, creating soft rim lighting on hair strands, color palette dominated by warm golds, soft creams, and muted earth tones with hints of lavender, evoking feelings of peaceful introspection and timeless elegance"
+
+        NOW CREATE THE REFINED PROMPT - Make it highly detailed, 250-300 words, with ALL style changes from the user incorporated:
+
+        REFINED PROMPT:"""
+
+        # Call OpenAI API with retry logic for robustness
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = client.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    messages=[
+                        {"role": "user", "content": refinement_prompt}
+                    ],
+                    max_tokens=1200,  # Increased for longer, more detailed prompts
+                    temperature=0.8,   # Slightly higher for more creative refinement
+                    top_p=0.9,
+                    frequency_penalty=0.1,  # Reduce repetition
+                    presence_penalty=0.3     # Encourage diverse descriptions
+                )
+                break  # Success, exit retry loop
+            except Exception as api_error:
+                if attempt < max_retries - 1:
+                    print(f"⚠️ Attempt {attempt + 1} failed, retrying...")
+                    time.sleep(1)
+                else:
+                    raise api_error
+        
+        # Get the refined prompt
+        refined_prompt = response.choices[0].message.content.strip()
+        
+        # Remove "REFINED PROMPT:" prefix if present
+        if refined_prompt.startswith("REFINED PROMPT:"):
+            refined_prompt = refined_prompt.replace("REFINED PROMPT:", "").strip()
+        
+        print("=" * 80)
+        print("🎯 REFINED PROMPT GENERATED:")
+        print("=" * 80)
+        print(refined_prompt)
+        print("=" * 80)
+        print(f"✅ Refined prompt length: {len(refined_prompt)} characters (~{len(refined_prompt.split())} words)")
+        print("=" * 80)
+        
+        return refined_prompt
+        
+    except Exception as e:
+        print(f"❌ Error refining prompt: {str(e)}")
+        import traceback
+        print(f"📋 Full traceback: {traceback.format_exc()}")
+        # Return combined prompt as fallback
+        return f"{base_prompt}. Additional details: {additional_details}"
+
+
 class PromptGenerationView(APIView):
     """Generate three prompt variations using OpenAI"""
     
@@ -755,6 +799,65 @@ class PromptGenerationView(APIView):
             print(f"❌ Error generating prompt variations: {str(e)}")
             return Response(
                 ResponseInfo.error(f"Failed to generate prompt variations: {str(e)}"),
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class RefinePromptView(APIView):
+    """Refine a selected prompt with additional details"""
+    
+    def post(self, request):
+        """Refine a prompt by incorporating additional user details"""
+        try:
+            # Get current user from JWT token
+            user = get_current_user(request)
+            if not user:
+                return Response(
+                    ResponseInfo.error("Authentication required"),
+                    status=status.HTTP_401_UNAUTHORIZED
+                )
+            
+            # Extract data from request
+            base_prompt = request.data.get('base_prompt', '').strip()
+            additional_details = request.data.get('additional_details', '').strip()
+            
+            # Validate required fields
+            if not base_prompt:
+                return Response(
+                    ResponseInfo.error("Base prompt is required"),
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            if not additional_details:
+                return Response(
+                    ResponseInfo.error("Additional details are required to refine the prompt"),
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Refine the prompt using OpenAI
+            print(f"🔧 Refining prompt with additional details...")
+            print(f"📝 Base prompt: {base_prompt[:100]}...")
+            print(f"➕ Additional details: {additional_details}")
+            
+            refined_prompt = refine_prompt_with_openai(base_prompt, additional_details)
+            
+            response_data = {
+                "base_prompt": base_prompt,
+                "additional_details": additional_details,
+                "refined_prompt": refined_prompt
+            }
+            
+            return Response(
+                ResponseInfo.success(response_data, "Prompt refined successfully"),
+                status=status.HTTP_200_OK
+            )
+            
+        except Exception as e:
+            print(f"❌ Error refining prompt: {str(e)}")
+            import traceback
+            print(f"📋 Full traceback: {traceback.format_exc()}")
+            return Response(
+                ResponseInfo.error(f"Failed to refine prompt: {str(e)}"),
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
