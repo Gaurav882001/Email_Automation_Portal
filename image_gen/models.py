@@ -41,7 +41,8 @@ class ReferenceImage(models.Model):
 class VideoGenerationJob(models.Model):
     job_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(Users, on_delete=models.CASCADE, related_name='video_jobs', null=True, blank=True)
-    prompt = models.TextField()
+    prompt = models.TextField()  # Enhanced prompt (final prompt used for generation)
+    original_prompt = models.TextField(null=True, blank=True)  # User's original prompt
     style = models.CharField(max_length=50, default='realistic')
     quality = models.CharField(max_length=50, default='high')
     duration = models.IntegerField(default=5)  # Duration in seconds

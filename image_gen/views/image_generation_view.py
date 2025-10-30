@@ -750,33 +750,39 @@ class PromptGenerationView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
-            # Check for reference images or CSV files - prompt generation should only work without them
-            has_reference_images = any(key.startswith('reference_image_') for key in request.FILES.keys())
-            has_csv_feedback = any(key == 'csv_feedback' for key in request.FILES.keys())
+            # Check for CSV files - prompt generation should only work without them
+            try:
+                has_csv_feedback = len(request.FILES.getlist('csv_feedback')) > 0
+            except Exception:
+                has_csv_feedback = any(key == 'csv_feedback' for key in request.FILES.keys()) or any(key.startswith('csv_feedback_') for key in request.FILES.keys())
             
-            if has_reference_images or has_csv_feedback:
+            if has_csv_feedback:
                 return Response(
-                    ResponseInfo.error("Prompt generation is only available when no reference images or CSV files are provided"),
+                    ResponseInfo.error("Prompt generation is only available when no CSV files are provided"),
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
-            # Process CSV feedback file if provided (this should not happen based on check above, but keeping for safety)
+            # Process CSV feedback files if provided (safety path)
             feedback_data = []
-            csv_file = None
             print(f"🔍 Checking for CSV files in request.FILES: {list(request.FILES.keys())}")
-            
+            csv_files = []
+            try:
+                csv_files = list(request.FILES.getlist('csv_feedback'))
+            except Exception:
+                csv_files = []
             for key, file in request.FILES.items():
-                print(f"📁 Found file: {key}, Content-Type: {file.content_type}, Size: {file.size}")
-                if key == 'csv_feedback' and (file.content_type == 'text/csv' or file.content_type == 'text/plain' or file.name.endswith('.csv') or file.name.endswith('.txt')):
+                if key.startswith('csv_feedback_'):
+                    csv_files.append(file)
+            for file in csv_files:
+                print(f"📁 Found CSV file: {file.name}, Content-Type: {file.content_type}, Size: {file.size}")
+                if (file.content_type == 'text/csv' or file.content_type == 'text/plain' or file.name.endswith('.csv') or file.name.endswith('.txt')):
                     try:
-                        csv_file = file
-                        print(f"✅ CSV file detected: {file.name}")
-                        feedback_data = process_csv_feedback(file)
-                        print(f"📊 Processed CSV feedback with {len(feedback_data)} entries")
+                        data = process_csv_feedback(file)
+                        feedback_data.extend(data)
                     except Exception as e:
                         print(f"❌ Error processing CSV feedback: {str(e)}")
                         continue
-                elif key == 'csv_feedback':
+                else:
                     print(f"⚠️ CSV file found but wrong content type: {file.content_type}")
             
             # Generate three prompt variations using OpenAI
@@ -916,31 +922,36 @@ class ImageGenerationView(APIView):
                         print(f"Error processing reference image {key}: {str(e)}")
                         continue
             
-            # Process CSV feedback file if provided
+            # Process CSV feedback files if provided
             feedback_data = []
-            csv_file = None
             print(f"🔍 Checking for CSV files in request.FILES: {list(request.FILES.keys())}")
-            
+            csv_files = []
+            try:
+                csv_files = list(request.FILES.getlist('csv_feedback'))
+            except Exception:
+                csv_files = []
             for key, file in request.FILES.items():
-                print(f"📁 Found file: {key}, Content-Type: {file.content_type}, Size: {file.size}")
-                if key == 'csv_feedback' and (file.content_type == 'text/csv' or file.content_type == 'text/plain' or file.name.endswith('.csv') or file.name.endswith('.txt')):
-                    try:
-                        csv_file = file
-                        print(f"✅ CSV file detected: {file.name}")
-                        feedback_data = process_csv_feedback(file)
-                        print(f"📊 Processed CSV feedback with {len(feedback_data)} entries")
-                    except Exception as e:
-                        print(f"❌ Error processing CSV feedback: {str(e)}")
-                        continue
-                elif key == 'csv_feedback':
-                    print(f"⚠️ CSV file found but wrong content type: {file.content_type}")
+                if key.startswith('csv_feedback_'):
+                    csv_files.append(file)
+            if csv_files:
+                print(f"✅ {len(csv_files)} CSV file(s) detected for image generation")
+                for file in csv_files:
+                    print(f"📁 CSV: {file.name} ({file.content_type}, {file.size} bytes)")
+                    if (file.content_type == 'text/csv' or file.content_type == 'text/plain' or file.name.endswith('.csv') or file.name.endswith('.txt')):
+                        try:
+                            data = process_csv_feedback(file)
+                            feedback_data.extend(data)
+                        except Exception as e:
+                            print(f"❌ Error processing CSV feedback: {str(e)}")
+                            continue
+                    else:
+                        print(f"⚠️ CSV file found but wrong content type: {file.content_type}")
             
             # Generate enhanced prompt using OpenAI if CSV feedback is provided
             final_prompt = prompt  # Default to user's original prompt
-            if feedback_data and csv_file:
+            if feedback_data:
                 print("🤖 CSV feedback detected - Generating enhanced prompt with OpenAI...")
-                print(f"📊 CSV file: {csv_file.name} ({csv_file.size} bytes)")
-                print(f"📈 Feedback entries: {len(feedback_data)}")
+                print(f"📈 Feedback entries: {len(feedback_data)} (merged across files)")
                 final_prompt = generate_enhanced_prompt_with_openai(prompt, feedback_data)
                 print(f"🎯 FINAL ENHANCED PROMPT FOR IMAGE GENERATION: {final_prompt}")
             elif reference_images:

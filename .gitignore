@@ -91,6 +91,10 @@ htmlcov/
 generated_images/
 media/generated_images/
 
+# Generated videos
+generated_videos/
+media/generated_videos/
+
 .coverage
 
 .coverage.*

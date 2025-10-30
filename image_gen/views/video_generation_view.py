@@ -5,6 +5,8 @@ import threading
 import warnings
 import base64
 import tempfile
+import openai
+import csv
 from datetime import datetime
 from django.conf import settings
 from django.core.files.storage import default_storage
@@ -31,6 +33,184 @@ load_dotenv()
 warnings.filterwarnings('ignore', message='Unverified HTTPS request')
 
 
+def process_csv_feedback(csv_file):
+    """Process CSV file and extract feedback data
+    
+    Supports two CSV formats:
+    1. New format: Review ID, Product ASIN, Product Name, Reviewer Name, Reviewer ID, 
+                   Review Title, Review Text, Rating, Verified Purchase, Review Date, 
+                   Helpful Votes, Total Votes, Country
+    2. Old/Simple format: Basic feedback text or any key-value CSV
+    """
+    try:
+        # Reset file pointer to beginning
+        csv_file.seek(0)
+        
+        # Read CSV content
+        csv_content = csv_file.read().decode('utf-8')
+        print(f"📄 CSV Content Preview: {csv_content[:200]}...")
+        
+        # Check if it's structured CSV (has headers) or simple text feedback
+        lines = csv_content.split('\n')
+        print(f"📄 Number of lines: {len(lines)}")
+        
+        # Try to parse as structured CSV first
+        try:
+            csv_reader = csv.DictReader(csv_content.splitlines())
+            feedback_data = list(csv_reader)
+            
+            if feedback_data:
+                print(f"✅ Successfully processed {len(feedback_data)} structured CSV entries")
+                print(f"📋 CSV Headers detected: {list(feedback_data[0].keys())}")
+                return feedback_data
+        except Exception as csv_error:
+            print(f"📄 Not structured CSV, trying as text feedback: {csv_error}")
+        
+        # If not structured CSV, treat as simple text feedback
+        if csv_content and len(csv_content.strip()) > 0:
+            print("📄 Processing as simple text feedback")
+            feedback_data = [{
+                'feedback_type': 'general',
+                'description': csv_content.strip(),
+                'rating': 'N/A',
+                'source': 'text_file'
+            }]
+            print(f"✅ Successfully processed 1 text feedback entry")
+            return feedback_data
+        
+        print("⚠️ No valid feedback data found in CSV")
+        return []
+        
+    except Exception as e:
+        print(f"❌ Error processing CSV feedback: {str(e)}")
+        print(f"📄 CSV file type: {type(csv_file)}")
+        print(f"📄 CSV file name: {getattr(csv_file, 'name', 'Unknown')}")
+        return []
+
+
+def extract_review_text_from_csv(feedback_data):
+    """Extract and combine review text from CSV feedback data"""
+    review_texts = []
+    
+    for feedback in feedback_data:
+        # Try different possible field names for review text
+        review_text = feedback.get('Review Text', '') or feedback.get('review_text', '') or feedback.get('Review', '') or feedback.get('review', '')
+        
+        if review_text and len(review_text.strip()) > 0:
+            review_texts.append(review_text.strip())
+    
+    return ' '.join(review_texts)
+
+
+def generate_enhanced_prompt_with_openai(user_prompt, feedback_data):
+    """Generate enhanced prompt using OpenAI based on CSV feedback and Review Text
+    
+    Uses the new CSV structure to extract Review Text and ratings for better prompt generation
+    """
+    try:
+        # Get OpenAI API key
+        openai_api_key = os.getenv('OPENAI_API_KEY')
+        
+        if not openai_api_key:
+            print("⚠️ OpenAI API key not found in environment variables")
+            print("💡 Please add OPENAI_API_KEY to your .env file")
+            return user_prompt
+        
+        print(f"🤖 OpenAI API Key: {'Present' if openai_api_key else 'Missing'}")
+        
+        # Extract review text from CSV using new structure
+        review_text = extract_review_text_from_csv(feedback_data)
+        
+        # Prepare feedback summary with additional metadata from new CSV structure
+        feedback_summary = ""
+        if feedback_data:
+            feedback_summary = "Based on the following product review feedback:\n"
+            
+            for i, feedback in enumerate(feedback_data[:5]):  # Limit to first 5 entries
+                # New CSV format fields
+                product_name = feedback.get('Product Name', 'Unknown Product')
+                rating = feedback.get('Rating', 'N/A')
+                review_text_field = feedback.get('Review Text', '')
+                review_title = feedback.get('Review Title', '')
+                verified = feedback.get('Verified Purchase', 'No')
+                helpful_votes = feedback.get('Helpful Votes', 0)
+                
+                feedback_summary += f"\n📦 Review {i+1}:\n"
+                feedback_summary += f"  • Product: {product_name}\n"
+                feedback_summary += f"  • Rating: {rating}/5 stars\n"
+                if review_title:
+                    feedback_summary += f"  • Title: {review_title}\n"
+                if review_text_field:
+                    feedback_summary += f"  • Review: {review_text_field[:200]}...\n"
+                feedback_summary += f"  • Verified Purchase: {verified}\n"
+                feedback_summary += f"  • Helpful Votes: {helpful_votes}\n"
+            
+            print(f"📊 Processing {len(feedback_data)} review feedback entries")
+        
+        # Create prompt for OpenAI
+        system_prompt = """You are an expert at enhancing video generation prompts based on product review feedback. 
+        Analyze the user's prompt and the provided customer reviews to create an improved, more detailed prompt 
+        that will generate better videos. Focus on:
+        1. Understanding customer preferences from review ratings and text
+        2. Incorporating specific product features mentioned in reviews
+        3. Adding visual elements that customers appreciate
+        4. Enhancing composition based on verified purchase feedback
+        5. Including style and quality elements that align with high-rated reviews
+        6. Adding technical video production terms (camera movements, lighting, cinematography)
+        7. Improving visual descriptions based on customer sentiment
+        8. Creating dynamic video scenarios that showcase product benefits
+        
+        Return only the enhanced prompt, no explanations."""
+        
+        user_message = f"""
+        Original user prompt: "{user_prompt}"
+        
+        {feedback_summary}
+        
+        Please enhance this prompt based on the product review feedback to create a better video generation prompt. 
+        Consider the ratings, customer feedback, and product details from the reviews to make the video more aligned with what customers appreciate.
+        """
+        
+        print("🔄 Calling OpenAI API for prompt enhancement with review feedback...")
+        
+        # Initialize OpenAI client with new API format
+        client = openai.OpenAI(api_key=openai_api_key)
+        
+        # Call OpenAI API with new format
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message}
+            ],
+            max_tokens=500,
+            temperature=0.7
+        )
+        
+        enhanced_prompt = response.choices[0].message.content.strip()
+        print("=" * 80)
+        print("🎯 PROMPT ENHANCEMENT RESULTS FROM REVIEW FEEDBACK:")
+        print("=" * 80)
+        print(f"📝 Original User Prompt: {user_prompt}")
+        print("-" * 80)
+        print(f"📦 Review Data Summary:")
+        print(f"   • Total Reviews: {len(feedback_data)}")
+        if feedback_data:
+            ratings = [f.get('Rating', 0) for f in feedback_data if f.get('Rating')]
+            if ratings:
+                avg_rating = sum(float(r) for r in ratings if r) / len([r for r in ratings if r])
+                print(f"   • Average Rating: {avg_rating:.1f}/5 stars")
+        print("-" * 80)
+        print(f"✨ Enhanced Prompt by OpenAI: {enhanced_prompt}")
+        print("=" * 80)
+        return enhanced_prompt
+        
+    except Exception as e:
+        print(f"❌ Error generating enhanced prompt: {str(e)}")
+        print(f"💡 Falling back to original user prompt: {user_prompt}")
+        return user_prompt
+
+
 def get_current_user(request):
     """Get current user from JWT token in Authorization header"""
     try:
@@ -48,6 +228,197 @@ def get_current_user(request):
         return user
     except (Users.DoesNotExist, IndexError, AttributeError):
         return None
+
+
+def generate_three_video_prompts_with_openai(user_prompt):
+    """Generate three different video prompt variations using OpenAI based on user input
+    
+    Args:
+        user_prompt (str): User's original video prompt
+        
+    Returns:
+        list: Three different detailed video prompt variations
+    """
+    try:
+        # Get OpenAI API key
+        openai_api_key = os.getenv('OPENAI_API_KEY')
+        
+        if not openai_api_key:
+            print("⚠️ OpenAI API key not found in environment variables")
+            print("💡 Please add OPENAI_API_KEY to your .env file")
+            # Return three variations of the original prompt (250-300 words each)
+            return [
+                f"A cinematic video opening with a smooth aerial drone shot that gracefully descends from 50 feet toward {user_prompt}, featuring professional camera work with steady movements, natural lighting creating depth and dimension, capturing the scene with a shallow depth of field that keeps the subject in sharp focus while the background gently blurs, creating an intimate and engaging visual narrative with warm color grading and a professional, polished aesthetic. The camera executes a slow 360-degree circular orbit around the subject at eye level, capturing dynamic movements and interactions with smooth gimbal-stabilized motion throughout. The video maintains a steady pace with gentle transitions between wide establishing shots and medium close-ups, showcasing the subject's actions and environmental details with rich, vibrant colors and natural lighting that enhances the overall mood and atmosphere. The cinematography emphasizes fluid camera movements, including slow dolly shots, gentle pans, and subtle zoom effects that draw the viewer's attention to key elements while maintaining visual continuity and narrative flow throughout the entire video sequence.",
+                
+                f"Create a dynamic handheld video showing {user_prompt} with energetic camera movements that follow the action closely, featuring quick transitions between different angles and perspectives, vibrant natural lighting with high contrast and rich colors, the camera capturing spontaneous moments and authentic interactions, creating a lively, documentary-style feel with contemporary visual language and an engaging, relatable mood. The video begins with a wide establishing shot that quickly cuts to medium shots and close-ups, using fast-paced editing and dynamic camera work including tracking shots, whip pans, and handheld movements that create a sense of immediacy and energy. The lighting varies from natural daylight to golden hour warmth, with dramatic shadows and highlights that add visual interest and depth to each frame. The camera work emphasizes movement and action, following subjects as they interact with their environment, using techniques like rack focus, shallow depth of field, and varied shot sizes to create a compelling visual narrative that keeps viewers engaged throughout the entire video experience.",
+                
+                f"An artistic slow-motion video capturing {user_prompt} through a series of carefully composed shots that emphasize beauty and emotion, beginning with a wide establishing shot that slowly zooms in, featuring dramatic lighting with strong shadows and highlights, the camera executing graceful movements like slow pans and gentle tilts, creating a dreamlike, atmospheric visual poem with moody color grading and an introspective, contemplative tone. The video unfolds with deliberate pacing, using techniques like time-lapse effects, slow-motion sequences, and smooth camera transitions to create a meditative viewing experience. The cinematography emphasizes visual storytelling through careful composition, with each shot carefully framed to highlight the subject's emotional journey and environmental context. The lighting design creates a rich, layered visual experience with warm and cool tones that shift throughout the video, while the camera movements remain fluid and purposeful, guiding the viewer's attention through the narrative with elegant precision and artistic flair that transforms a simple concept into a compelling visual story."
+            ]
+        
+        print(f"🤖 OpenAI API Key: {'Present' if openai_api_key else 'Missing'}")
+        
+        # Create system prompt for generating three video-specific variations
+        system_prompt = """You are an expert at creating high-quality, detailed video generation prompts for AI video generation tool - Google Veo 3.1. 
+Based on the user's input, create THREE different comprehensive prompt variations that are specifically designed for video generation.
+
+CRITICAL REQUIREMENT: Each prompt MUST be exactly 250-300 words long with rich, specific details.
+
+IMPORTANT: Focus on VIDEO-SPECIFIC elements. These prompts should describe what happens in the video, how things move, and the overall cinematic feel.
+
+Key Elements to include for VIDEO prompts:
+
+1. CAMERA MOVEMENTS & CINEMATOGRAPHY:
+- Static shot, Slow pan, Zoom in/out, Dolly shot, Tracking shot, Crane shot, Handheld
+- Smooth gimbal movement, Steady cam, Aerial drone shot, First-person POV
+- Camera pull-back, Push-in, Orbit around subject, Whip pan, Tilt, Dutch angle
+- Shot types: Wide shot, Medium shot, Close-up, Extreme close-up, Establishing shot, Over-the-shoulder
+- Depth of field: Shallow focus, Deep focus, Rack focus (focus shift between subjects)
+- Frame rate feel: Slow motion, Real-time, Time-lapse effect, Smooth/Cinematic
+
+2. SCENE DYNAMICS & MOTION:
+- Subject movement and actions (walking, running, dancing, gesturing, interacting, working, playing)
+- Environmental changes (wind blowing, water flowing, lights changing, clouds moving, shadows shifting)
+- Interaction between elements (people talking, objects moving, animals playing, vehicles in motion)
+- Temporal progression (sunrise to day, seasons changing, growth/transformation, day to night)
+- Speed of movement (fast-paced, leisurely, graceful, energetic, sudden, gradual)
+- Direction of movement (toward camera, away, left to right, circular, diagonal, vertical)
+
+3. LIGHTING & VISUAL STYLE:
+- Lighting: Natural daylight, Golden hour, Blue hour, Studio lighting, Neon lights, Dramatic shadows, Backlit, Rim lighting, Practical lighting
+- Visual styles: Cinematic (film-like, professional movie quality, epic), Documentary (realistic, observational, authentic), Commercial (polished, advertising style, high production value), Artistic (creative, experimental, unique perspective), Vintage (retro film look, grainy, nostalgic), Modern (clean, contemporary, sleek), Music Video (stylized, rhythmic cuts, artistic flair)
+
+4. MOOD & ATMOSPHERE:
+- Emotional tone: Joyful, Melancholic, Suspenseful, Peaceful, Energetic, Mysterious, Romantic, Dramatic, Intense, Serene
+- Setting atmosphere: Cozy, Epic, Intimate, Grand, Moody, Bright, Dreamy, Ethereal, Gritty, Elegant
+- Weather/Environment: Sunny, Rainy, Foggy, Snowy, Windy, Clear, Stormy, Misty, Overcast, Partly cloudy
+
+5. DETAILED SCENE CONSTRUCTION:
+- Specific locations and settings (indoor/outdoor, urban/rural, natural/artificial environments)
+- Character descriptions and their actions throughout the video
+- Object interactions and movements
+- Environmental details that enhance the visual narrative
+- Color palettes and visual themes
+- Sound design elements (though focus on visual aspects)
+
+6. TEMPORAL FLOW & NARRATIVE:
+- Beginning: How the video opens and establishes the scene
+- Middle: The main action, movement, and development
+- End: How the video concludes or transitions
+- Pacing: Fast, slow, varied, building to climax, steady rhythm
+- Story arc: Even for simple concepts, create a visual narrative flow
+
+WORD COUNT REQUIREMENTS:
+- Each prompt MUST be exactly 250-300 words long
+- Use rich, descriptive language with specific details
+- Include multiple camera movements, lighting descriptions, and scene dynamics
+- Describe actions, movements, and interactions in detail
+- Paint a complete visual picture that tells a story through motion
+
+CRITICAL FORMAT REQUIREMENTS:
+- Return EXACTLY 3 prompts
+- Separate each prompt with "|||" (three pipe characters)
+- Each prompt must be on a single line
+- No explanations, no numbering, no additional text
+- No line breaks within prompts
+- Just the three comprehensive video prompts separated by "|||"
+
+Remember: These are VIDEO prompts - focus on movement, action, camera work, temporal flow, and what HAPPENS in the video! Each prompt should be a complete, detailed description of a video that could be generated."""
+
+        user_message = f"""User's original prompt: "{user_prompt}"
+
+Based on this prompt, create THREE highly detailed video generation prompts that:
+1. Are EXACTLY 250-300 words long with SPECIFIC details about camera movement, subject actions, and scene dynamics
+2. Each take a DIFFERENT creative approach (different camera styles, moods, cinematography, pacing)
+3. Focus on MOVEMENT and what HAPPENS in the video over time (not just static descriptions)
+4. Include specific camera movements (dolly, pan, zoom, tracking, crane, handheld, etc.)
+5. Describe subject actions, movements, and interactions in detail throughout the video
+6. Specify lighting, atmosphere, and mood appropriate for video with rich descriptions
+7. Create different visual styles and emotional tones across the three variations
+8. Describe the temporal flow - how the video unfolds from beginning to end
+9. Include environmental details, character descriptions, and object interactions
+10. Use vivid, descriptive language that paints a complete moving picture
+
+WORD COUNT REQUIREMENT: Each prompt must be 250-300 words. Count your words carefully!
+
+Return ONLY the three detailed video prompts separated by "|||" (three pipe characters).
+No explanations, no labels, just the three comprehensive video prompts.
+
+CRITICAL: Each prompt MUST focus on VIDEO elements - what moves, how the camera moves, what actions happen, how the scene unfolds over time! Make each prompt a complete, detailed description of a video that could be generated.
+
+NOW CREATE THE THREE VIDEO PROMPTS:"""
+        
+        # Merge system prompt and user message
+        merged_prompt = f"{system_prompt}\n\n{user_message}"
+        
+        print("🔄 Calling OpenAI API for three video prompt variations...")
+        print(f"📝 User prompt: {user_prompt}")
+        
+        # Initialize OpenAI client
+        client = openai.OpenAI(api_key=openai_api_key)
+        
+        # Retry logic for API call
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                # Call OpenAI API
+                response = client.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    messages=[
+                        {"role": "user", "content": merged_prompt}
+                    ],
+                    max_tokens=2500,  # Increased to accommodate 250-300 word prompts
+                    temperature=0.9,
+                    top_p=0.95,
+                    frequency_penalty=0.1,
+                    presence_penalty=0.5
+                )
+                break  # Success, exit retry loop
+            except Exception as e:
+                print(f"⚠️ OpenAI API call attempt {attempt + 1} failed: {str(e)}")
+                if attempt == max_retries - 1:
+                    raise e
+                time.sleep(1)
+        
+        # Parse the response
+        response_text = response.choices[0].message.content.strip()
+        print(f"🤖 OpenAI Response received ({len(response_text)} characters)")
+        
+        # Split by the separator and clean up
+        raw_prompts = response_text.split("|||")
+        prompts = [prompt.strip() for prompt in raw_prompts if prompt.strip()]
+        
+        print(f"✅ Parsed {len(prompts)} video prompts")
+        
+        # Ensure we have exactly 3 prompts
+        if len(prompts) != 3:
+            print(f"⚠️ Expected 3 prompts, got {len(prompts)}. Creating fallback prompts.")
+            prompts = [
+                f"A cinematic video opening with a smooth dolly shot moving toward {user_prompt}, featuring professional camera work with steady movements, natural lighting creating depth and dimension, capturing the scene with a shallow depth of field that keeps the subject in sharp focus while the background gently blurs, creating an intimate and engaging visual narrative with warm color grading and a professional, polished aesthetic. The camera executes a slow 360-degree circular orbit around the subject at eye level, capturing dynamic movements and interactions with smooth gimbal-stabilized motion throughout. The video maintains a steady pace with gentle transitions between wide establishing shots and medium close-ups, showcasing the subject's actions and environmental details with rich, vibrant colors and natural lighting that enhances the overall mood and atmosphere. The cinematography emphasizes fluid camera movements, including slow dolly shots, gentle pans, and subtle zoom effects that draw the viewer's attention to key elements while maintaining visual continuity and narrative flow throughout the entire video sequence.",
+                
+                f"Create a dynamic handheld video showing {user_prompt} with energetic camera movements that follow the action closely, featuring quick transitions between different angles and perspectives, vibrant natural lighting with high contrast and rich colors, the camera capturing spontaneous moments and authentic interactions, creating a lively, documentary-style feel with contemporary visual language and an engaging, relatable mood. The video begins with a wide establishing shot that quickly cuts to medium shots and close-ups, using fast-paced editing and dynamic camera work including tracking shots, whip pans, and handheld movements that create a sense of immediacy and energy. The lighting varies from natural daylight to golden hour warmth, with dramatic shadows and highlights that add visual interest and depth to each frame. The camera work emphasizes movement and action, following subjects as they interact with their environment, using techniques like rack focus, shallow depth of field, and varied shot sizes to create a compelling visual narrative that keeps viewers engaged throughout the entire video experience.",
+                
+                f"An artistic slow-motion video capturing {user_prompt} through a series of carefully composed shots that emphasize beauty and emotion, beginning with a wide establishing shot that slowly zooms in, featuring dramatic lighting with strong shadows and highlights, the camera executing graceful movements like slow pans and gentle tilts, creating a dreamlike, atmospheric visual poem with moody color grading and an introspective, contemplative tone. The video unfolds with deliberate pacing, using techniques like time-lapse effects, slow-motion sequences, and smooth camera transitions to create a meditative viewing experience. The cinematography emphasizes visual storytelling through careful composition, with each shot carefully framed to highlight the subject's emotional journey and environmental context. The lighting design creates a rich, layered visual experience with warm and cool tones that shift throughout the video, while the camera movements remain fluid and purposeful, guiding the viewer's attention through the narrative with elegant precision and artistic flair that transforms a simple concept into a compelling visual story."
+            ]
+        
+        print("=" * 80)
+        print("🎯 THREE VIDEO PROMPT VARIATIONS GENERATED:")
+        print("=" * 80)
+        for i, prompt in enumerate(prompts, 1):
+            print(f"📹 Video Prompt {i}: {prompt[:100]}...")
+        print("=" * 80)
+        
+        return prompts
+        
+    except Exception as e:
+        print(f"❌ Error generating three video prompts: {str(e)}")
+        print(f"💡 Falling back to default video prompt variations")
+        return [
+            f"A cinematic video opening with a smooth aerial drone shot that gracefully descends from 50 feet toward {user_prompt}, featuring professional camera work with steady movements, natural lighting creating depth and dimension, capturing the scene with a shallow depth of field that keeps the subject in sharp focus while the background gently blurs, creating an intimate and engaging visual narrative with warm color grading and a professional, polished aesthetic. The camera executes a slow 360-degree circular orbit around the subject at eye level, capturing dynamic movements and interactions with smooth gimbal-stabilized motion throughout. The video maintains a steady pace with gentle transitions between wide establishing shots and medium close-ups, showcasing the subject's actions and environmental details with rich, vibrant colors and natural lighting that enhances the overall mood and atmosphere. The cinematography emphasizes fluid camera movements, including slow dolly shots, gentle pans, and subtle zoom effects that draw the viewer's attention to key elements while maintaining visual continuity and narrative flow throughout the entire video sequence.",
+            
+            f"Create a dynamic handheld video showing {user_prompt} with energetic camera movements that follow the action closely, featuring quick transitions between different angles and perspectives, vibrant natural lighting with high contrast and rich colors, the camera capturing spontaneous moments and authentic interactions, creating a lively, documentary-style feel with contemporary visual language and an engaging, relatable mood. The video begins with a wide establishing shot that quickly cuts to medium shots and close-ups, using fast-paced editing and dynamic camera work including tracking shots, whip pans, and handheld movements that create a sense of immediacy and energy. The lighting varies from natural daylight to golden hour warmth, with dramatic shadows and highlights that add visual interest and depth to each frame. The camera work emphasizes movement and action, following subjects as they interact with their environment, using techniques like rack focus, shallow depth of field, and varied shot sizes to create a compelling visual narrative that keeps viewers engaged throughout the entire video experience.",
+            
+            f"An artistic slow-motion video capturing {user_prompt} through a series of carefully composed shots that emphasize beauty and emotion, beginning with a wide establishing shot that slowly zooms in, featuring dramatic lighting with strong shadows and highlights, the camera executing graceful movements like slow pans and gentle tilts, creating a dreamlike, atmospheric visual poem with moody color grading and an introspective, contemplative tone. The video unfolds with deliberate pacing, using techniques like time-lapse effects, slow-motion sequences, and smooth camera transitions to create a meditative viewing experience. The cinematography emphasizes visual storytelling through careful composition, with each shot carefully framed to highlight the subject's emotional journey and environmental context. The lighting design creates a rich, layered visual experience with warm and cool tones that shift throughout the video, while the camera movements remain fluid and purposeful, guiding the viewer's attention through the narrative with elegant precision and artistic flair that transforms a simple concept into a compelling visual story."
+        ]
 
 
 def generate_video_with_veo(job_id, prompt, duration):
@@ -298,10 +669,54 @@ class VideoGenerationView(APIView):
                 print(f"⚠️ Invalid duration {duration}, defaulting to 5 seconds")
                 duration = 5  # Default to 5 seconds if invalid
             
+            # Process CSV feedback file if provided
+            feedback_data = []
+            csv_files: list = []
+            print(f"🔍 Checking for CSV files in request.FILES: {list(request.FILES.keys())}")
+
+            # Collect csv files from getlist('csv_file') if available
+            try:
+                csv_files = list(request.FILES.getlist('csv_file'))  # type: ignore[attr-defined]
+            except Exception:
+                csv_files = []
+
+            # Also collect any indexed csv_file_* keys
+            for key, file in request.FILES.items():
+                if key.startswith('csv_file_'):
+                    csv_files.append(file)
+
+            if csv_files:
+                print(f"✅ {len(csv_files)} CSV file(s) detected")
+                for idx, file in enumerate(csv_files, start=1):
+                    print(f"📁 CSV[{idx}]: {file.name} ({file.content_type}, {file.size} bytes)")
+                    if (file.content_type == 'text/csv' or file.content_type == 'text/plain' or file.name.endswith('.csv') or file.name.endswith('.txt')):
+                        try:
+                            data = process_csv_feedback(file)
+                            feedback_data.extend(data)
+                        except Exception as e:
+                            print(f"❌ Error processing CSV file {file.name}: {str(e)}")
+                            continue
+                    else:
+                        print(f"⚠️ Skipping CSV file with wrong content type: {file.content_type}")
+             
+            # Generate enhanced prompt using OpenAI if CSV feedback is provided
+            final_prompt = prompt  # Default to user's original prompt
+            original_prompt = prompt  # Store original prompt
+            
+            if feedback_data:
+                print("🤖 CSV feedback detected - Generating enhanced prompt with OpenAI...")
+                print(f"📈 Feedback entries (merged across files): {len(feedback_data)}")
+                final_prompt = generate_enhanced_prompt_with_openai(prompt, feedback_data)
+                print(f"🎯 FINAL ENHANCED PROMPT FOR VIDEO GENERATION: {final_prompt}")
+            else:
+                print("📝 No CSV feedback - Using original user prompt")
+                print(f"🎯 FINAL PROMPT FOR VIDEO GENERATION: {final_prompt}")
+            
             # Create video generation job
             job = VideoGenerationJob.objects.create(
                 user=user,
-                prompt=prompt,
+                prompt=final_prompt,  # Use enhanced prompt
+                original_prompt=original_prompt,  # Store original prompt
                 style=style,
                 quality=quality,
                 duration=duration,
@@ -468,7 +883,8 @@ class VideoJobListView(APIView):
                     'job_id': str(job.job_id),
                     'status': job.status,
                     'progress': job.progress,
-                    'prompt': job.prompt,
+                    'prompt': job.prompt,  # Enhanced prompt (final prompt used for generation)
+                    'original_prompt': job.original_prompt,  # User's original prompt
                     'style': job.style,
                     'quality': job.quality,
                     'duration': job.duration,
@@ -651,5 +1067,254 @@ class VideoDashboardStatsView(APIView):
             print(f"Error in VideoDashboardStatsView: {str(e)}")
             return Response(
                 ResponseInfo.error(f"Failed to get statistics: {str(e)}"),
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+def refine_video_prompt_with_openai(base_prompt, additional_details):
+    """Refine a selected video prompt with additional user details using OpenAI
+    
+    Args:
+        base_prompt (str): The base video prompt selected by user
+        additional_details (str): Additional details provided by user
+        
+    Returns:
+        str: A more detailed, refined video prompt
+    """
+    try:
+        # Get OpenAI API key
+        openai_api_key = os.getenv('OPENAI_API_KEY')
+        
+        if not openai_api_key:
+            print("⚠️ OpenAI API key not found - returning combined prompt")
+            return f"{base_prompt}. Additional details: {additional_details}"
+        
+        print("🔄 Refining video prompt with OpenAI...")
+        print(f"📝 Base prompt length: {len(base_prompt)} characters")
+        print(f"➕ Additional details length: {len(additional_details)} characters")
+        
+        # Initialize OpenAI client
+        client = openai.OpenAI(api_key=openai_api_key)
+        
+        # Create a comprehensive refinement prompt for VIDEO
+        refinement_prompt = f"""You are an expert at refining and enhancing VIDEO generation prompts for professional-grade AI video generation tools like Google Veo.
+
+BASE VIDEO PROMPT (already detailed):
+{base_prompt}
+
+ADDITIONAL USER DETAILS TO INCORPORATE:
+{additional_details}
+
+YOUR TASK:
+Create ONE extremely detailed, refined VIDEO prompt that intelligently merges the base prompt with the additional details.
+
+CRITICAL RULES FOR VIDEO PROMPTS:
+
+1. **VIDEO ELEMENT REPLACEMENT**: If the additional details specify video-specific elements (camera movements, scene dynamics, motion, pacing, cinematography, lighting, mood), REPLACE the corresponding elements in the base prompt. Do NOT keep both versions.
+
+Examples:
+- If base has "slow pan" and user adds "fast tracking shot" → Use "fast tracking shot"
+- If base has "static camera" and user adds "handheld movement" → Use "handheld movement"
+- If base has "slow motion" and user adds "real-time" → Use "real-time"
+- If base has "golden hour" and user adds "blue hour" → Use "blue hour"
+- If base has "subject walking" and user adds "subject running" → Use "subject running"
+
+2. **ADDITIVE ELEMENTS**: If the additional details add NEW elements (objects, actions, environmental details, characters, props) that don't contradict the base, seamlessly integrate them.
+
+Examples:
+- Base: "person walking in park" + Additional: "add flying birds in background" → Include both
+- Base: "sunset scene" + Additional: "add gentle wind blowing trees" → Include both
+
+3. **LENGTH & DETAIL**: The refined prompt MUST be 100-150 words. Focus on VIDEO-SPECIFIC elements:
+- Camera movements and cinematography (dolly, pan, zoom, tracking, aerial, handheld, etc.)
+- Subject actions and movements (walking, running, gesturing, interacting, etc.)
+- Scene dynamics (environmental changes, interactions, temporal progression)
+- Motion details (speed, direction, type of action)
+- Lighting and atmosphere specific to video
+- Frame rate feel (slow motion, real-time, time-lapse)
+- Shot types and composition
+- Temporal flow (how the video unfolds from beginning to end)
+
+4. **VIDEO-FIRST FOCUS**: This is a VIDEO prompt - emphasize:
+- What MOVES and HOW it moves
+- Camera work and cinematography
+- Actions that unfold over TIME
+- Scene progression and temporal elements
+- NOT static image descriptions
+
+5. **PROFESSIONAL LANGUAGE**: Use cinematography, videography, and filmmaking terminology. Be specific and technical.
+
+EXAMPLE OF DETAIL LEVEL NEEDED FOR VIDEO:
+"A cinematic 8-second video opening with a smooth aerial drone shot that gracefully descends from 50 feet toward a young woman in a flowing white sundress spinning joyfully in a sunlit meadow filled with golden wildflowers, the camera executing a slow 360-degree circular orbit around her at eye level as she twirls with arms outstretched, capturing her dress billowing in the gentle breeze and her long chestnut hair floating in the wind, the wildflowers swaying rhythmically in synchronized motion, warm golden hour sunlight streaming through from camera left at 45 degrees creating beautiful natural lens flares and soft bokeh effects in the background, the video maintaining smooth gimbal-stabilized movement throughout, ending with a slow push-in to a medium close-up of her radiant smiling face as she looks directly at camera with pure joy, shot at 60fps for slight slow-motion effect, color graded with warm honey tones and soft highlights, creating a dreamy, ethereal, uplifting atmosphere that captures the essence of carefree happiness"
+
+NOW CREATE THE REFINED VIDEO PROMPT - Make it highly detailed, 100-150 words, with ALL style changes from the user incorporated, focusing on MOVEMENT, CAMERA WORK, and TEMPORAL FLOW:
+
+REFINED VIDEO PROMPT:"""
+
+        # Call OpenAI API with retry logic
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = client.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    messages=[
+                        {"role": "user", "content": refinement_prompt}
+                    ],
+                    max_tokens=800,
+                    temperature=0.8,
+                    top_p=0.9,
+                    frequency_penalty=0.1,
+                    presence_penalty=0.3
+                )
+                break  # Success, exit retry loop
+            except Exception as api_error:
+                if attempt < max_retries - 1:
+                    print(f"⚠️ Attempt {attempt + 1} failed, retrying...")
+                    time.sleep(1)
+                else:
+                    raise api_error
+        
+        # Get the refined prompt
+        refined_prompt = response.choices[0].message.content.strip()
+        
+        # Remove "REFINED VIDEO PROMPT:" prefix if present
+        if refined_prompt.startswith("REFINED VIDEO PROMPT:"):
+            refined_prompt = refined_prompt.replace("REFINED VIDEO PROMPT:", "").strip()
+        
+        print("=" * 80)
+        print("🎯 REFINED VIDEO PROMPT GENERATED:")
+        print("=" * 80)
+        print(refined_prompt)
+        print("=" * 80)
+        print(f"✅ Refined prompt length: {len(refined_prompt)} characters (~{len(refined_prompt.split())} words)")
+        print("=" * 80)
+        
+        return refined_prompt
+        
+    except Exception as e:
+        print(f"❌ Error refining video prompt: {str(e)}")
+        import traceback
+        print(f"📋 Full traceback: {traceback.format_exc()}")
+        # Return combined prompt as fallback
+        return f"{base_prompt}. Additional details: {additional_details}"
+
+
+class VideoPromptGenerationView(APIView):
+    """Generate three video prompt variations using OpenAI"""
+    
+    def post(self, request):
+        """Generate three different video prompt variations based on user input"""
+        try:
+            # Get current user from JWT token
+            user = get_current_user(request)
+            if not user:
+                return Response(
+                    ResponseInfo.error("Authentication required"),
+                    status=status.HTTP_401_UNAUTHORIZED
+                )
+            
+            # Extract data from request
+            prompt = request.data.get('prompt', '').strip()
+            
+            # Validate required fields
+            if not prompt:
+                return Response(
+                    ResponseInfo.error("Prompt is required for prompt generation"),
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Check for CSV files - prompt generation should only work without them
+            has_csv_file = any(key == 'csv_file' for key in request.FILES.keys())
+            
+            if has_csv_file:
+                return Response(
+                    ResponseInfo.error("Prompt generation is only available when no CSV files are provided"),
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Generate three video prompt variations using OpenAI
+            print("🎬 Generating three video prompt variations with OpenAI...")
+            prompt_variations = generate_three_video_prompts_with_openai(prompt)
+            
+            # Format the response - join prompts with ||| for frontend parsing
+            prompts_string = "|||".join(prompt_variations)
+            
+            response_data = {
+                "original_prompt": prompt,
+                "prompts": prompts_string,  # Pipe-separated string for frontend
+                "prompt_variations": prompt_variations,  # List for backward compatibility
+                "generation_type": "video"
+            }
+            
+            return Response(
+                ResponseInfo.success(response_data, "Three video prompt variations generated successfully"),
+                status=status.HTTP_200_OK
+            )
+            
+        except Exception as e:
+            print(f"❌ Error generating video prompt variations: {str(e)}")
+            import traceback
+            print(f"📋 Full traceback: {traceback.format_exc()}")
+            return Response(
+                ResponseInfo.error(f"Failed to generate video prompt variations: {str(e)}"),
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class RefineVideoPromptView(APIView):
+    """Refine a selected video prompt with additional details"""
+    
+    def post(self, request):
+        """Refine a video prompt by incorporating additional user details"""
+        try:
+            # Get current user from JWT token
+            user = get_current_user(request)
+            if not user:
+                return Response(
+                    ResponseInfo.error("Authentication required"),
+                    status=status.HTTP_401_UNAUTHORIZED
+                )
+            
+            # Extract data from request
+            base_prompt = request.data.get('base_prompt', '').strip()
+            additional_details = request.data.get('additional_details', '').strip()
+            
+            # Validate required fields
+            if not base_prompt:
+                return Response(
+                    ResponseInfo.error("Base prompt is required"),
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            if not additional_details:
+                return Response(
+                    ResponseInfo.error("Additional details are required to refine the prompt"),
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Refine the video prompt using OpenAI
+            print(f"🔧 Refining video prompt with additional details...")
+            print(f"📝 Base prompt: {base_prompt[:100]}...")
+            print(f"➕ Additional details: {additional_details}")
+            
+            refined_prompt = refine_video_prompt_with_openai(base_prompt, additional_details)
+            
+            response_data = {
+                "base_prompt": base_prompt,
+                "additional_details": additional_details,
+                "refined_prompt": refined_prompt
+            }
+            
+            return Response(
+                ResponseInfo.success(response_data, "Video prompt refined successfully"),
+                status=status.HTTP_200_OK
+            )
+            
+        except Exception as e:
+            print(f"❌ Error refining video prompt: {str(e)}")
+            import traceback
+            print(f"📋 Full traceback: {traceback.format_exc()}")
+            return Response(
+                ResponseInfo.error(f"Failed to refine video prompt: {str(e)}"),
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )

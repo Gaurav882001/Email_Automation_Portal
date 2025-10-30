@@ -3,7 +3,7 @@ from rest_framework.decorators import api_view
 
 from .views import auth_view, general_view
 from .views.image_generation_view import ImageGenerationView, ImageStatusView, JobListView, RetryJobView, DeleteJobView, DashboardStatsView, PromptGenerationView, RefinePromptView
-from .views.video_generation_view import VideoGenerationView, VideoStatusView, VideoJobListView, VideoRetryJobView, VideoDeleteJobView, VideoDashboardStatsView
+from .views.video_generation_view import VideoGenerationView, VideoStatusView, VideoJobListView, VideoRetryJobView, VideoDeleteJobView, VideoDashboardStatsView, VideoPromptGenerationView, RefineVideoPromptView
 
 urlpatterns = [
     
@@ -38,5 +38,9 @@ urlpatterns = [
     path('retry-video-job/<str:job_id>/', VideoRetryJobView.as_view(), name='retry-video-job'),
     path('delete-video-job/<str:job_id>/', VideoDeleteJobView.as_view(), name='delete-video-job'),
     path('video-dashboard-stats/', VideoDashboardStatsView.as_view(), name='video-dashboard-stats'),
+    
+    # Video prompt generation
+    path('generate-video-prompts/', VideoPromptGenerationView.as_view(), name='generate-video-prompts'),
+    path('refine-video-prompt/', RefineVideoPromptView.as_view(), name='refine-video-prompt'),
 
 ]
