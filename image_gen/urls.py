@@ -4,6 +4,7 @@ from rest_framework.decorators import api_view
 from .views import auth_view, general_view
 from .views.image_generation_view import ImageGenerationView, ImageStatusView, JobListView, RetryJobView, DeleteJobView, DashboardStatsView, PromptGenerationView, RefinePromptView
 from .views.video_generation_view import VideoGenerationView, VideoStatusView, VideoJobListView, VideoRetryJobView, VideoDeleteJobView, VideoDashboardStatsView, VideoPromptGenerationView, RefineVideoPromptView
+from .views.avatar_generation_view import AvatarGenerationView, AvatarStatusView, AvatarJobListView, AvatarRetryJobView, AvatarDeleteJobView, AvatarImageView, AvatarVoicesView
 
 urlpatterns = [
     
@@ -42,5 +43,14 @@ urlpatterns = [
     # Video prompt generation
     path('generate-video-prompts/', VideoPromptGenerationView.as_view(), name='generate-video-prompts'),
     path('refine-video-prompt/', RefineVideoPromptView.as_view(), name='refine-video-prompt'),
+    
+    # Avatar generation with HeyGen
+    path('generate-avatar/', AvatarGenerationView.as_view(), name='generate-avatar'),
+    path('avatar-status/<str:job_id>/', AvatarStatusView.as_view(), name='avatar-status'),
+    path('avatar-jobs/', AvatarJobListView.as_view(), name='avatar-job-list'),
+    path('retry-avatar-job/<str:job_id>/', AvatarRetryJobView.as_view(), name='retry-avatar-job'),
+    path('delete-avatar-job/<str:job_id>/', AvatarDeleteJobView.as_view(), name='delete-avatar-job'),
+    path('avatar-images/<str:generation_id>/', AvatarImageView.as_view(), name='avatar-images'),
+    path('avatar-voices/', AvatarVoicesView.as_view(), name='avatar-voices'),
 
 ]
