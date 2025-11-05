@@ -750,12 +750,12 @@ class AvatarGenerationView(APIView):
                 print("📝 No reference images provided - using photo/generate endpoint (prompt-based)")
                 create_avatar_url = "https://api.heygen.com/v2/photo_avatar/photo/generate"
                 
-                # Build payload with all required HeyGen API parameters
+                # Build payload with all required HeyGen API parameters  
                 payload = {
                     "appearance": job.prompt[:1000] if job.prompt else ""  # Max 1000 characters
                 }
                 
-                # Add optional fields if provided
+                # Add optional fields if provided  
                 if job.name:
                     payload["name"] = job.name
                 if job.age:
