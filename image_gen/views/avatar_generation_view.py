@@ -2331,7 +2331,6 @@ class AvatarPromptGenerationView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
-
 def refine_avatar_prompt_with_openai(base_prompt, additional_details):
     """Refine a selected avatar prompt with additional user details using OpenAI
     
