@@ -5,6 +5,7 @@ import warnings
 import threading
 import requests
 import time
+import openai
 from django.conf import settings
 from django.utils import timezone
 from rest_framework.views import APIView
@@ -2091,6 +2092,422 @@ class AvatarVoicesView(APIView):
             print(traceback.format_exc())
             return Response(
                 ResponseInfo.error(f"Error fetching voices: {str(e)}"),
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+def generate_three_avatar_prompts_with_openai(user_prompt):
+    """Generate three different avatar prompt variations using OpenAI based on user input
+    
+    Args:
+        user_prompt (str): User's original avatar description/prompt
+        
+    Returns:
+        list: Three different detailed avatar prompt variations optimized for HeyGen photo_avatar generation
+    """
+    try:
+        # Get OpenAI API key
+        openai_api_key = os.getenv('OPENAI_API_KEY')
+        
+        if not openai_api_key:
+            print("⚠️ OpenAI API key not found in environment variables")
+            print("💡 Please add OPENAI_API_KEY to your .env file")
+            # Return three variations of the original prompt
+            return [
+                f"A professional portrait of {user_prompt}, realistic style, natural lighting, high quality, detailed facial features, clean background",
+                f"A character design of {user_prompt}, artistic style, expressive features, vibrant colors, professional photography, studio lighting",
+                f"A detailed avatar of {user_prompt}, photorealistic style, soft lighting, high resolution, portrait orientation, professional quality"
+            ]
+        
+        print(f"🤖 OpenAI API Key: {'Present' if openai_api_key else 'Missing'}")
+        
+        # Create system prompt for generating three avatar-specific variations
+        system_prompt = """You are an expert at creating high-quality, detailed avatar generation prompts for AI avatar generation tools like HeyGen's photo_avatar API.
+Based on the user's input, create THREE different comprehensive prompt variations that are specifically designed for avatar/character generation.
+
+CRITICAL REQUIREMENT: Each prompt MUST be detailed and descriptive, focusing on appearance, characteristics, and visual attributes suitable for creating realistic or stylized avatars.
+
+IMPORTANT: Focus on AVATAR-SPECIFIC elements. These prompts should describe a person's appearance, characteristics, and visual attributes that can be used to generate an avatar image.
+
+Key Elements to include for AVATAR prompts:
+
+1. PHYSICAL APPEARANCE:
+- Age: Infant, Child, Teen, Young Adult, Middle-Aged, Elderly
+- Gender: Man, Woman, Non-binary, Unspecified
+- Ethnicity: Specific ethnic background or Unspecified
+- Hair: Color, style, length, texture (e.g., "long black wavy hair", "short blonde pixie cut", "curly brown hair")
+- Eyes: Color, shape, expression (e.g., "bright blue eyes", "warm brown eyes", "almond-shaped eyes")
+- Facial features: Bone structure, skin tone, distinctive features
+- Build: Body type, height, physique
+- Facial hair: Beard, mustache, clean-shaven (for applicable genders)
+
+2. CLOTHING & STYLE:
+- Clothing type: Formal, casual, business, traditional, modern, vintage, sporty
+- Specific garments: Shirt, dress, suit, jacket, accessories
+- Colors and patterns: Specific color schemes, patterns, textures
+- Style: Classic, contemporary, trendy, professional, artistic
+
+3. POSE & ORIENTATION:
+- Portrait orientation: Vertical, horizontal, square
+- Pose: Full body, half body, close-up, headshot
+- Position: Standing, sitting, facing camera, side profile, three-quarter view
+- Expression: Smiling, serious, neutral, friendly, professional
+
+4. VISUAL STYLE:
+- Realistic: Photorealistic, professional photography style
+- Artistic: Stylized, illustrated, digital art style
+- Quality: High resolution, detailed, professional quality
+- Background: Clean, solid color, blurred, studio setting, environmental
+
+5. CHARACTER & MOOD:
+- Personality traits: Friendly, serious, professional, approachable, confident
+- Expression: Smiling, neutral, serious, warm, energetic
+- Mood: Professional, casual, elegant, vibrant, calm
+
+6. DETAILED DESCRIPTIONS:
+- Specific facial features (nose shape, cheekbones, jawline)
+- Skin tone and texture
+- Hair details (parting, volume, styling)
+- Eye characteristics (color, size, shape, expression)
+- Clothing details (fit, style, accessories)
+- Overall appearance and presentation
+
+WORD COUNT REQUIREMENTS:
+- Each prompt MUST be 30-80 words long
+- Use rich, descriptive language with specific details
+- Include multiple appearance attributes, style elements, and visual characteristics
+- Describe appearance, clothing, pose, and mood in detail
+- Paint a complete visual picture of the avatar
+
+CRITICAL FORMAT REQUIREMENTS:
+- Return EXACTLY 3 prompts
+- Separate each prompt with "|||" (three pipe characters)
+- Each prompt must be on a single line
+- No explanations, no numbering, no additional text
+- No line breaks within prompts
+- Just the three comprehensive avatar prompts separated by "|||"
+
+Remember: These are AVATAR prompts - focus on appearance, characteristics, visual attributes, and how the person looks! Each prompt should be a complete, detailed description of an avatar that could be generated."""
+
+        user_message = f"""User's original prompt: "{user_prompt}"
+
+Based on this prompt, create THREE highly detailed avatar generation prompts that:
+1. Are EXACTLY 30-80 words long with SPECIFIC details about appearance, characteristics, and visual attributes
+2. Each take a DIFFERENT creative approach (different styles, poses, expressions, clothing)
+3. Focus on APPEARANCE and how the person looks (not actions or scenes)
+4. Include specific physical features (hair, eyes, facial features, build)
+5. Describe clothing, style, and presentation in detail
+6. Specify pose, orientation, and expression
+7. Create different visual styles and moods across the three variations
+8. Include background and lighting descriptions
+9. Use vivid, descriptive language that paints a complete picture of the avatar
+10. Optimize for avatar/character generation tools
+
+WORD COUNT REQUIREMENT: Each prompt must be 30-80 words. Count your words carefully!
+
+Return ONLY the three detailed avatar prompts separated by "|||" (three pipe characters).
+No explanations, no labels, just the three comprehensive avatar prompts.
+
+CRITICAL: Each prompt MUST focus on AVATAR elements - appearance, characteristics, visual attributes, how the person looks! Make each prompt a complete, detailed description of an avatar that could be generated.
+
+NOW CREATE THE THREE AVATAR PROMPTS:"""
+        
+        # Merge system prompt and user message
+        merged_prompt = f"{system_prompt}\n\n{user_message}"
+        
+        print("🔄 Calling OpenAI API for three avatar prompt variations...")
+        print(f"📝 User prompt: {user_prompt}")
+        
+        # Initialize OpenAI client
+        client = openai.OpenAI(api_key=openai_api_key)
+        
+        # Retry logic for API call
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                # Call OpenAI API
+                response = client.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    messages=[
+                        {"role": "user", "content": merged_prompt}
+                    ],
+                    max_tokens=1200,  # Enough for 3 detailed avatar prompts
+                    temperature=0.9,
+                    top_p=0.95,
+                    frequency_penalty=0.1,
+                    presence_penalty=0.5
+                )
+                break  # Success, exit retry loop
+            except Exception as e:
+                print(f"⚠️ OpenAI API call attempt {attempt + 1} failed: {str(e)}")
+                if attempt == max_retries - 1:
+                    raise e
+                time.sleep(1)
+        
+        # Parse the response
+        response_text = response.choices[0].message.content.strip()
+        print(f"🤖 OpenAI Response received ({len(response_text)} characters)")
+        
+        # Split by the separator and clean up
+        raw_prompts = response_text.split("|||")
+        prompts = [prompt.strip() for prompt in raw_prompts if prompt.strip()]
+        
+        print(f"✅ Parsed {len(prompts)} avatar prompts")
+        
+        # Ensure we have exactly 3 prompts
+        if len(prompts) != 3:
+            print(f"⚠️ Expected 3 prompts, got {len(prompts)}. Creating fallback prompts.")
+            prompts = [
+                f"A professional portrait of {user_prompt}, realistic style, natural lighting, high quality, detailed facial features, clean background, professional photography, studio setting",
+                f"A character design of {user_prompt}, artistic style, expressive features, vibrant colors, professional photography, studio lighting, detailed appearance, modern presentation",
+                f"A detailed avatar of {user_prompt}, photorealistic style, soft lighting, high resolution, portrait orientation, professional quality, clean background, expressive features"
+            ]
+        
+        print("=" * 80)
+        print("🎯 THREE AVATAR PROMPT VARIATIONS GENERATED:")
+        print("=" * 80)
+        for i, prompt in enumerate(prompts, 1):
+            print(f"👤 Avatar Prompt {i}: {prompt[:100]}...")
+        print("=" * 80)
+        
+        return prompts
+        
+    except Exception as e:
+        print(f"❌ Error generating three avatar prompts: {str(e)}")
+        print(f"💡 Falling back to default avatar prompt variations")
+        return [
+            f"A professional portrait of {user_prompt}, realistic style, natural lighting, high quality, detailed facial features, clean background, professional photography, studio setting",
+            f"A character design of {user_prompt}, artistic style, expressive features, vibrant colors, professional photography, studio lighting, detailed appearance, modern presentation",
+            f"A detailed avatar of {user_prompt}, photorealistic style, soft lighting, high resolution, portrait orientation, professional quality, clean background, expressive features"
+        ]
+
+
+class AvatarPromptGenerationView(APIView):
+    """Generate three avatar prompt variations using OpenAI"""
+    
+    def post(self, request):
+        """Generate three different avatar prompt variations based on user input"""
+        try:
+            # Get current user from JWT token
+            user = get_current_user(request)
+            if not user:
+                return Response(
+                    ResponseInfo.error("Authentication required"),
+                    status=status.HTTP_401_UNAUTHORIZED
+                )
+            
+            # Extract data from request
+            prompt = request.data.get('prompt', '').strip()
+            
+            # Validate required fields
+            if not prompt:
+                return Response(
+                    ResponseInfo.error("Prompt is required for prompt generation"),
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Generate three avatar prompt variations using OpenAI
+            print("👤 Generating three avatar prompt variations with OpenAI...")
+            prompt_variations = generate_three_avatar_prompts_with_openai(prompt)
+            
+            # Format the response
+            response_data = {
+                "original_prompt": prompt,
+                "prompt_variations": prompt_variations,
+                "generation_type": "avatar"
+            }
+            
+            return Response(
+                ResponseInfo.success(response_data, "Three avatar prompt variations generated successfully"),
+                status=status.HTTP_200_OK
+            )
+            
+        except Exception as e:
+            print(f"❌ Error generating avatar prompt variations: {str(e)}")
+            import traceback
+            print(f"📋 Full traceback: {traceback.format_exc()}")
+            return Response(
+                ResponseInfo.error(f"Failed to generate avatar prompt variations: {str(e)}"),
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+def refine_avatar_prompt_with_openai(base_prompt, additional_details):
+    """Refine a selected avatar prompt with additional user details using OpenAI
+    
+    Args:
+        base_prompt (str): The base avatar prompt selected by user
+        additional_details (str): Additional details provided by user
+        
+    Returns:
+        str: A refined avatar prompt that incorporates the additional details
+    """
+    try:
+        # Get OpenAI API key
+        openai_api_key = os.getenv('OPENAI_API_KEY')
+        
+        if not openai_api_key:
+            print("⚠️ OpenAI API key not found - returning combined prompt")
+            return f"{base_prompt}. {additional_details}"
+        
+        print("🔄 Refining avatar prompt with OpenAI...")
+        print(f"📝 Base prompt: {base_prompt[:100]}...")
+        print(f"➕ Additional details: {additional_details}")
+        
+        # Initialize OpenAI client
+        client = openai.OpenAI(api_key=openai_api_key)
+        
+        # Create a simple refinement prompt focused on avatar appearance
+        refinement_prompt = f"""You are an expert at refining avatar generation prompts for AI avatar generation tools.
+
+BASE AVATAR PROMPT:
+{base_prompt}
+
+ADDITIONAL USER DETAILS TO INCORPORATE:
+{additional_details}
+
+YOUR TASK:
+Create ONE refined avatar prompt that naturally incorporates the additional details into the base prompt. Keep it simple and focused on avatar appearance and characteristics.
+
+CRITICAL RULES:
+
+1. **FOCUS ON APPEARANCE**: This is an avatar prompt - focus on how the person looks, not complex artistic specifications.
+
+2. **INCORPORATE USER DETAILS**: Seamlessly integrate the additional details about:
+   - Physical appearance (hair, eyes, facial features, age, gender, ethnicity)
+   - Clothing and style
+   - Pose and expression
+   - Background (if mentioned)
+   - Any specific characteristics the user wants
+
+3. **KEEP IT SIMPLE**: Do NOT add complex specifications like:
+   - Cinematic styles
+   - Vibes and moods (unless specifically requested)
+   - Complex artistic techniques
+   - Photography specifications (unless relevant)
+   - Overly detailed lighting descriptions
+
+4. **LENGTH**: Keep the refined prompt concise (30-100 words), clear, and descriptive.
+
+5. **AVATAR-FOCUSED**: Focus on:
+   - Physical characteristics
+   - Appearance details
+   - Clothing and style
+   - Expression and pose
+   - Simple, natural descriptions
+
+6. **NATURAL LANGUAGE**: Write in natural, simple language that describes the avatar clearly.
+
+EXAMPLE OF GOOD REFINED PROMPT:
+"A professional portrait of a young woman with long brown wavy hair, bright green eyes, and a warm smile. She's wearing a blue blazer over a white shirt, professional business attire. Clean background, natural lighting, friendly expression."
+
+NOW CREATE THE REFINED AVATAR PROMPT - Keep it simple, clear, and focused on appearance:
+
+REFINED AVATAR PROMPT:"""
+
+        # Call OpenAI API with retry logic
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = client.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    messages=[
+                        {"role": "user", "content": refinement_prompt}
+                    ],
+                    max_tokens=300,  # Shorter for simpler prompts
+                    temperature=0.7,  # Lower for more consistent results
+                    top_p=0.9,
+                    frequency_penalty=0.1,
+                    presence_penalty=0.2
+                )
+                break  # Success, exit retry loop
+            except Exception as api_error:
+                if attempt < max_retries - 1:
+                    print(f"⚠️ Attempt {attempt + 1} failed, retrying...")
+                    time.sleep(1)
+                else:
+                    raise api_error
+        
+        # Get the refined prompt
+        refined_prompt = response.choices[0].message.content.strip()
+        
+        # Remove "REFINED AVATAR PROMPT:" prefix if present
+        if refined_prompt.startswith("REFINED AVATAR PROMPT:"):
+            refined_prompt = refined_prompt.replace("REFINED AVATAR PROMPT:", "").strip()
+        
+        print("=" * 80)
+        print("🎯 REFINED AVATAR PROMPT GENERATED:")
+        print("=" * 80)
+        print(refined_prompt)
+        print("=" * 80)
+        print(f"✅ Refined prompt length: {len(refined_prompt)} characters (~{len(refined_prompt.split())} words)")
+        print("=" * 80)
+        
+        return refined_prompt
+        
+    except Exception as e:
+        print(f"❌ Error refining avatar prompt: {str(e)}")
+        import traceback
+        print(f"📋 Full traceback: {traceback.format_exc()}")
+        # Return combined prompt as fallback
+        return f"{base_prompt}. {additional_details}"
+
+
+class RefineAvatarPromptView(APIView):
+    """Refine a selected avatar prompt with additional details"""
+    
+    def post(self, request):
+        """Refine an avatar prompt by incorporating additional user details"""
+        try:
+            # Get current user from JWT token
+            user = get_current_user(request)
+            if not user:
+                return Response(
+                    ResponseInfo.error("Authentication required"),
+                    status=status.HTTP_401_UNAUTHORIZED
+                )
+            
+            # Extract data from request
+            base_prompt = request.data.get('base_prompt', '').strip()
+            additional_details = request.data.get('additional_details', '').strip()
+            
+            # Validate required fields
+            if not base_prompt:
+                return Response(
+                    ResponseInfo.error("Base prompt is required"),
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            if not additional_details:
+                return Response(
+                    ResponseInfo.error("Additional details are required to refine the prompt"),
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Refine the avatar prompt using OpenAI
+            print(f"🔧 Refining avatar prompt with additional details...")
+            print(f"📝 Base prompt: {base_prompt[:100]}...")
+            print(f"➕ Additional details: {additional_details}")
+            
+            refined_prompt = refine_avatar_prompt_with_openai(base_prompt, additional_details)
+            
+            response_data = {
+                "base_prompt": base_prompt,
+                "additional_details": additional_details,
+                "refined_prompt": refined_prompt
+            }
+            
+            return Response(
+                ResponseInfo.success(response_data, "Avatar prompt refined successfully"),
+                status=status.HTTP_200_OK
+            )
+            
+        except Exception as e:
+            print(f"❌ Error refining avatar prompt: {str(e)}")
+            import traceback
+            print(f"📋 Full traceback: {traceback.format_exc()}")
+            return Response(
+                ResponseInfo.error(f"Failed to refine avatar prompt: {str(e)}"),
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
