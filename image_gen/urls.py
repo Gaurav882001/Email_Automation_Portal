@@ -4,7 +4,7 @@ from rest_framework.decorators import api_view
 from .views import auth_view, general_view
 from .views.image_generation_view import ImageGenerationView, ImageStatusView, JobListView, RetryJobView, DeleteJobView, DashboardStatsView, PromptGenerationView, RefinePromptView
 from .views.video_generation_view import VideoGenerationView, VideoStatusView, VideoJobListView, VideoRetryJobView, VideoDeleteJobView, VideoDashboardStatsView, VideoPromptGenerationView, RefineVideoPromptView
-from .views.avatar_generation_view import AvatarGenerationView, AvatarStatusView, AvatarJobListView, AvatarRetryJobView, AvatarDeleteJobView, AvatarImageView, AvatarVoicesView, AvatarPromptGenerationView, RefineAvatarPromptView
+from .views.avatar_generation_view import AvatarGenerationView, AvatarStatusView, AvatarJobListView, AvatarRetryJobView, AvatarDeleteJobView, AvatarImageView, AvatarVoicesView, AvatarPromptGenerationView, RefineAvatarPromptView, AvatarScriptGenerationView, AvatarScriptRefinementView
 
 urlpatterns = [
     
@@ -56,5 +56,7 @@ urlpatterns = [
     # Avatar prompt generation
     path('generate-avatar-prompts/', AvatarPromptGenerationView.as_view(), name='generate-avatar-prompts'),
     path('refine-avatar-prompt/', RefineAvatarPromptView.as_view(), name='refine-avatar-prompt'),
+    path('generate-avatar-script/', AvatarScriptGenerationView.as_view(), name='generate-avatar-script'),
+    path('refine-avatar-script/', AvatarScriptRefinementView.as_view(), name='refine-avatar-script'),
 
 ]

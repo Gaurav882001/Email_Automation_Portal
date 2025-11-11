@@ -8,6 +8,7 @@ import time
 import openai
 from django.conf import settings
 from django.utils import timezone
+from django.db import transaction
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -213,25 +214,81 @@ def check_avatar_generation_status(job_id, generation_id, api_key):
                     )
                     
                     if is_completed:
-                        # Avatar generation completed
+                        # Avatar generation completed - but don't mark as completed yet
+                        # Wait until avatar_group creation succeeds (if needed)
                         try:
-                            job.status = "completed"
-                            job.progress = 100
-                            job.completed_at = timezone.now()
-                            if avatar_url:
-                                # Truncate URL if it's too long
-                                job.avatar_url = avatar_url[:2000] if len(avatar_url) > 2000 else avatar_url
+                            # Use database-level locking to prevent concurrent uploads/avatar_group creation
+                            # Lock the job record to ensure only one thread processes the upload
+                            should_upload = False
+                            with transaction.atomic():
+                                # Re-fetch job with lock to prevent race conditions
+                                locked_job = AvatarGenerationJob.objects.select_for_update().get(job_id=job_id)
+                                
+                                # Check if job is already completed or has error - if so, skip processing
+                                if locked_job.status in ['completed', 'error']:
+                                    print(f"ℹ️ Job {job_id} is already {locked_job.status}, skipping upload/avatar_group creation")
+                                    break
+                                
+                                # Save avatar URL and avatar_id first (while we have the lock)
+                                if avatar_url:
+                                    locked_job.avatar_url = avatar_url[:2000] if len(avatar_url) > 2000 else avatar_url
+                                
+                                # Extract and save avatar_id if available (truncate to 255 chars)
+                                avatar_id_value = status_data.get('data', {}).get('avatar_id') or status_data.get('avatar_id')
+                                if avatar_id_value:
+                                    locked_job.avatar_id = str(avatar_id_value)[:255]
+                                
+                                # Check if image_key is already set (upload already done) or is being uploaded
+                                # Only one thread will pass this check due to the lock
+                                marker_cleared = False
+                                if locked_job.image_key:
+                                    # Check if it's a processing marker or a real image_key
+                                    if locked_job.image_key.startswith('UPLOADING_'):
+                                        # Check if processing marker is stale (older than 5 minutes)
+                                        try:
+                                            marker_timestamp = int(locked_job.image_key.split('_')[1])
+                                            current_timestamp = int(time.time() * 1000)
+                                            if current_timestamp - marker_timestamp > 300000:  # 5 minutes in milliseconds
+                                                print(f"⚠️ Job {job_id} processing marker is stale (older than 5 minutes), clearing and retrying upload")
+                                                locked_job.image_key = None
+                                                locked_job.save(update_fields=['image_key'])
+                                                marker_cleared = True
+                                                # Will fall through to upload logic below
+                                            else:
+                                                print(f"ℹ️ Job {job_id} is already being uploaded by another thread, skipping")
+                                                avatar_group_creation_needed = False
+                                                job = locked_job
+                                        except (ValueError, IndexError):
+                                            # Invalid marker format, clear it and retry
+                                            print(f"⚠️ Job {job_id} has invalid processing marker, clearing and retrying upload")
+                                            locked_job.image_key = None
+                                            locked_job.save(update_fields=['image_key'])
+                                            marker_cleared = True
+                                            # Will fall through to upload logic below
+                                    else:
+                                        print(f"ℹ️ Job {job_id} already has image_key: {locked_job.image_key}, skipping upload")
+                                        avatar_group_creation_needed = False
+                                        job = locked_job
+                                
+                                # If marker was cleared or image_key is None, proceed with upload
+                                if (not locked_job.image_key or marker_cleared) and avatar_url:
+                                    # This thread will handle the upload - mark as processing IMMEDIATELY while lock is held
+                                    # This prevents other threads from starting upload
+                                    processing_marker = f"UPLOADING_{int(time.time() * 1000)}"
+                                    locked_job.image_key = processing_marker
+                                    locked_job.save(update_fields=['image_key', 'avatar_url', 'avatar_id'])
+                                    should_upload = True
+                                    job = locked_job
+                                    print(f"🔒 Job {job_id} marked as uploading, proceeding with upload...")
+                                else:
+                                    # No avatar_url or already processed
+                                    avatar_group_creation_needed = False
+                                    job = locked_job
                             
-                            # Extract and save avatar_id if available (truncate to 255 chars)
-                            avatar_id_value = status_data.get('data', {}).get('avatar_id') or status_data.get('avatar_id')
-                            if avatar_id_value:
-                                job.avatar_id = str(avatar_id_value)[:255]
-                            
-                            # For prompt-based generation (no image_key), upload the generated avatar to HeyGen
-                            # Refresh job from DB to avoid race conditions with concurrent status checks
-                            job.refresh_from_db()
-                            
-                            if not job.image_key and avatar_url:
+                            # Do upload/avatar_group creation OUTSIDE the transaction to avoid holding lock during HTTP requests
+                            if should_upload:
+                                # Need to upload and create avatar_group
+                                avatar_group_creation_needed = True
                                 print(f"🔄 Uploading generated avatar to HeyGen to save to account...")
                                 try:
                                     # Download the image from avatar_url
@@ -274,65 +331,167 @@ def check_avatar_generation_status(job_id, generation_id, api_key):
                                             if image_key:
                                                 print(f"✅ Successfully uploaded avatar to HeyGen! Image key: {image_key}")
                                                 
-                                                # Save image_key immediately to prevent duplicate uploads
-                                                job.image_key = image_key
-                                                job.save(update_fields=['image_key'])
+                                                # Replace processing marker with real image_key
+                                                # Use lock to atomically update image_key
+                                                with transaction.atomic():
+                                                    job_check = AvatarGenerationJob.objects.select_for_update().get(job_id=job_id)
+                                                    # Check if it's still our processing marker or was already set by another thread
+                                                    if job_check.image_key and job_check.image_key.startswith('UPLOADING_'):
+                                                        # This is our processing marker, replace it with real image_key
+                                                        job_check.image_key = image_key
+                                                        job_check.save(update_fields=['image_key'])
+                                                        job = job_check
+                                                        print(f"✅ Job {job_id} image_key updated from processing marker to: {image_key}")
+                                                    elif job_check.image_key and not job_check.image_key.startswith('UPLOADING_'):
+                                                        # Another thread already set a real image_key (shouldn't happen, but handle it)
+                                                        print(f"ℹ️ Job {job_id} image_key was already set by another thread: {job_check.image_key}")
+                                                        image_key = job_check.image_key  # Use the existing one
+                                                        job = job_check
+                                                        avatar_group_creation_needed = False  # Skip avatar_group creation
+                                                    else:
+                                                        # No image_key set (unlikely, but handle it)
+                                                        job_check.image_key = image_key
+                                                        job_check.save(update_fields=['image_key'])
+                                                        job = job_check
+                                                        print(f"✅ Job {job_id} image_key set to: {image_key}")
                                                 
-                                                # Create avatar_group using the uploaded image_key
-                                                avatar_group_url = "https://api.heygen.com/v2/photo_avatar/avatar_group/create"
-                                                avatar_group_headers = {
-                                                    'accept': 'application/json',
-                                                    'content-type': 'application/json',
-                                                    'x-api-key': api_key
-                                                }
-                                                avatar_group_payload = {
-                                                    "name": job.name if job.name else "Generated Avatar",
-                                                    "image_key": image_key
-                                                }
-                                                
-                                                print(f"📤 Creating avatar_group with payload: {avatar_group_payload}")
-                                                avatar_group_response = requests.post(
-                                                    avatar_group_url,
-                                                    headers=avatar_group_headers,
-                                                    json=avatar_group_payload,
-                                                    timeout=30
-                                                )
-                                                
-                                                if avatar_group_response.status_code == 200:
-                                                    avatar_group_data = avatar_group_response.json()
-                                                    print(f"📥 Avatar group response: {avatar_group_data}")
-                                                    group_id = (
-                                                        avatar_group_data.get('data', {}).get('id') or
-                                                        avatar_group_data.get('data', {}).get('group_id') or
-                                                        avatar_group_data.get('id') or
-                                                        avatar_group_data.get('group_id')
+                                                # Create avatar_group only if we just set the image_key
+                                                if avatar_group_creation_needed:
+                                                    # Create avatar_group using the uploaded image_key
+                                                    avatar_group_url = "https://api.heygen.com/v2/photo_avatar/avatar_group/create"
+                                                    avatar_group_headers = {
+                                                        'accept': 'application/json',
+                                                        'content-type': 'application/json',
+                                                        'x-api-key': api_key
+                                                    }
+                                                    avatar_group_payload = {
+                                                        "name": job.name if job.name else "Generated Avatar",
+                                                        "image_key": image_key
+                                                    }
+                                                    
+                                                    print(f"📤 Creating avatar_group with payload: {avatar_group_payload}")
+                                                    avatar_group_response = requests.post(
+                                                        avatar_group_url,
+                                                        headers=avatar_group_headers,
+                                                        json=avatar_group_payload,
+                                                        timeout=30
                                                     )
                                                     
-                                                    if group_id:
-                                                        print(f"✅ Successfully created avatar_group with ID: {group_id} (saved to account)")
-                                                        # Update job with avatar_group details
-                                                        job.generation_id = str(group_id)  # Update to avatar_group ID
-                                                        # Keep the original avatar_url for display
+                                                    if avatar_group_response.status_code == 200:
+                                                        avatar_group_data = avatar_group_response.json()
+                                                        print(f"📥 Avatar group response: {avatar_group_data}")
+                                                        group_id = (
+                                                            avatar_group_data.get('data', {}).get('id') or
+                                                            avatar_group_data.get('data', {}).get('group_id') or
+                                                            avatar_group_data.get('id') or
+                                                            avatar_group_data.get('group_id')
+                                                        )
+                                                        
+                                                        if group_id:
+                                                            print(f"✅ Successfully created avatar_group with ID: {group_id} (saved to account)")
+                                                            # Update job with avatar_group details
+                                                            with transaction.atomic():
+                                                                job_update = AvatarGenerationJob.objects.select_for_update().get(job_id=job_id)
+                                                                job_update.generation_id = str(group_id)
+                                                                job_update.save(update_fields=['generation_id'])
+                                                                job = job_update
+                                                            # Keep the original avatar_url for display
+                                                            avatar_group_creation_needed = False  # Successfully created
+                                                        else:
+                                                            print(f"⚠️ Failed to get group_id from avatar_group response: {avatar_group_response.text[:200]}")
+                                                            # Don't mark as error if group_id is missing - might still be processing
+                                                            # Keep avatar_group_creation_needed = True to continue checking
                                                     else:
-                                                        print(f"⚠️ Failed to get group_id from avatar_group response: {avatar_group_response.text[:200]}")
-                                                else:
-                                                    print(f"⚠️ Failed to create avatar_group: {avatar_group_response.status_code} - {avatar_group_response.text[:200]}")
+                                                        # Avatar group creation failed - extract error message and mark job as error
+                                                        try:
+                                                            error_response = avatar_group_response.json() if avatar_group_response.text else {}
+                                                            error_data = error_response.get('error', {}) or error_response.get('data', {})
+                                                            error_msg = (
+                                                                error_data.get('message') or 
+                                                                error_response.get('message') or 
+                                                                f"Failed to create avatar_group: {avatar_group_response.status_code}"
+                                                            )
+                                                        except:
+                                                            error_msg = f"Failed to create avatar_group: {avatar_group_response.status_code} - {avatar_group_response.text[:200]}"
+                                                        
+                                                        print(f"❌ Failed to create avatar_group: {avatar_group_response.status_code} - {error_msg}")
+                                                        
+                                                        # Mark job as error since avatar_group creation failed
+                                                        # But preserve avatar_url so user can still access the generated avatar
+                                                        with transaction.atomic():
+                                                            job_error = AvatarGenerationJob.objects.select_for_update().get(job_id=job_id)
+                                                            job_error.status = "error"
+                                                            job_error.progress = 0
+                                                            job_error.completed_at = timezone.now()
+                                                            job_error.error_message = error_msg
+                                                            # Ensure avatar_url is preserved (it should already be set, but be explicit)
+                                                            if avatar_url and not job_error.avatar_url:
+                                                                job_error.avatar_url = avatar_url[:2000] if len(avatar_url) > 2000 else avatar_url
+                                                            job_error.save()
+                                                            job = job_error
+                                                        print(f"❌ Job {job_id} marked as error: {error_msg} (avatar_url preserved: {bool(job.avatar_url)})")
+                                                        avatar_group_creation_needed = False
                                             else:
                                                 print(f"⚠️ No image_key in upload response: {upload_data}")
+                                                # Upload failed - clear processing marker
+                                                with transaction.atomic():
+                                                    job_fail = AvatarGenerationJob.objects.select_for_update().get(job_id=job_id)
+                                                    if job_fail.image_key and job_fail.image_key.startswith('UPLOADING_'):
+                                                        job_fail.image_key = None  # Clear processing marker
+                                                        job_fail.save(update_fields=['image_key'])
+                                                # Upload failed but we have avatar_url - mark as completed anyway
+                                                avatar_group_creation_needed = False
                                         else:
                                             print(f"⚠️ Failed to upload image to HeyGen: {upload_response.status_code} - {upload_response.text[:200]}")
+                                            # Upload failed - clear processing marker
+                                            with transaction.atomic():
+                                                job_fail = AvatarGenerationJob.objects.select_for_update().get(job_id=job_id)
+                                                if job_fail.image_key and job_fail.image_key.startswith('UPLOADING_'):
+                                                    job_fail.image_key = None  # Clear processing marker
+                                                    job_fail.save(update_fields=['image_key'])
+                                            # Upload failed but we have avatar_url - mark as completed anyway
+                                            avatar_group_creation_needed = False
                                     else:
                                         print(f"⚠️ Failed to download image from {avatar_url}: {img_response.status_code}")
+                                        # Download failed - clear processing marker
+                                        with transaction.atomic():
+                                            job_fail = AvatarGenerationJob.objects.select_for_update().get(job_id=job_id)
+                                            if job_fail.image_key and job_fail.image_key.startswith('UPLOADING_'):
+                                                job_fail.image_key = None  # Clear processing marker
+                                                job_fail.save(update_fields=['image_key'])
+                                        # Download failed but we have avatar_url - mark as completed anyway
+                                        avatar_group_creation_needed = False
                                 except Exception as upload_error:
                                     print(f"⚠️ Error uploading generated avatar to HeyGen: {str(upload_error)}")
                                     import traceback
                                     print(traceback.format_exc())
-                                    # Continue anyway - at least we have the avatar_url
+                                    # Upload error - clear processing marker
+                                    try:
+                                        with transaction.atomic():
+                                            job_fail = AvatarGenerationJob.objects.select_for_update().get(job_id=job_id)
+                                            if job_fail.image_key and job_fail.image_key.startswith('UPLOADING_'):
+                                                job_fail.image_key = None  # Clear processing marker
+                                                job_fail.save(update_fields=['image_key'])
+                                    except Exception as clear_error:
+                                        print(f"⚠️ Failed to clear processing marker: {str(clear_error)}")
+                                    # Upload error but we have avatar_url - mark as completed anyway
+                                    avatar_group_creation_needed = False
                             
-                            job.save()
-                            print(f"✅ Job {job_id} completed successfully! Avatar URL: {avatar_url}")
-                            # Break out of the loop since job is completed
-                            break
+                            # Mark as completed only if avatar_group creation succeeded or wasn't needed
+                            # Re-fetch job to get latest state
+                            job = AvatarGenerationJob.objects.get(job_id=job_id)
+                            if not avatar_group_creation_needed and job.status != "error":
+                                job.status = "completed"
+                                job.progress = 100
+                                job.completed_at = timezone.now()
+                                job.save()
+                                print(f"✅ Job {job_id} completed successfully! Avatar URL: {avatar_url}")
+                                # Break out of the loop since job is completed
+                                break
+                            elif job.status == "error":
+                                # Already marked as error, break out
+                                break
+                            # Otherwise, continue checking (avatar_group_creation_needed is still True)
                         except Exception as save_error:
                             print(f"❌ Error saving completed job {job_id}: {str(save_error)}")
                             import traceback
@@ -389,7 +548,7 @@ def check_avatar_generation_status(job_id, generation_id, api_key):
     try:
         job = AvatarGenerationJob.objects.get(job_id=job_id)
         job.status = "error"
-        job.error_message = "Avatar generation timed out after 5 minutes"
+        job.error_message = "Avatar generation failed"
         job.completed_at = timezone.now()
         job.save()
         print(f"⏱️ Job {job_id} timed out")
@@ -955,7 +1114,46 @@ class AvatarGenerationView(APIView):
                         job.error_message = error_msg
                         job.save()
                 else:
-                    error_msg = f"HeyGen API returned status {response.status_code}: {response.text[:500]}"
+                    # Try to extract error message from response
+                    error_msg = None
+                    try:
+                        error_data = response.json()
+                        # Try to extract error message from various locations
+                        error_obj = error_data.get('error') or error_data.get('data', {}).get('error')
+                        if error_obj:
+                            if isinstance(error_obj, dict):
+                                error_msg = (
+                                    error_obj.get('message') or 
+                                    error_obj.get('msg') or 
+                                    error_obj.get('error') or
+                                    str(error_obj)
+                                )
+                            else:
+                                error_msg = str(error_obj)
+                        
+                        if not error_msg:
+                            msg = error_data.get('data', {}).get('message') or error_data.get('message')
+                            if msg and msg.lower() != 'success':
+                                error_msg = msg
+                        
+                        if not error_msg:
+                            error_msg = (
+                                error_data.get('data', {}).get('error_message') or
+                                error_data.get('error_message') or
+                                error_data.get('data', {}).get('msg') or
+                                error_data.get('msg')
+                            )
+                    except:
+                        pass
+                    
+                    # If no error message extracted, use default
+                    if not error_msg:
+                        error_msg = f"HeyGen API returned status {response.status_code}: {response.text[:500]}"
+                    
+                    # Final safety check: never use "Success" as an error message
+                    if error_msg and error_msg.lower() == 'success':
+                        error_msg = f"HeyGen API returned status {response.status_code}"
+                    
                     print(f"❌ {error_msg}")
                     job.status = "error"
                     job.progress = 0
@@ -1060,8 +1258,53 @@ class AvatarGenerationView(APIView):
                         print(f"✅ Video generation completed! Video URL: {video_url}, Thumbnail URL: {thumbnail_url}")
                         return
                     elif video_status == 'failed' or video_status == 'error':
-                        # Video failed
-                        error_msg = status_data.get('data', {}).get('message') or status_data.get('message', 'Video generation failed')
+                        # Video failed - extract error message from various possible locations
+                        error_msg = None
+                        
+                        # Try to get error message from error object first
+                        error_obj = status_data.get('error') or status_data.get('data', {}).get('error')
+                        if error_obj:
+                            if isinstance(error_obj, dict):
+                                error_msg = (
+                                    error_obj.get('message') or 
+                                    error_obj.get('msg') or 
+                                    error_obj.get('error') or
+                                    str(error_obj)
+                                )
+                            else:
+                                error_msg = str(error_obj)
+                        
+                        # If no error object, try message field (but skip if it says "Success")
+                        if not error_msg:
+                            msg = status_data.get('data', {}).get('message') or status_data.get('message')
+                            if msg and msg.lower() != 'success':
+                                error_msg = msg
+                        
+                        # Try other error fields
+                        if not error_msg:
+                            error_msg = (
+                                status_data.get('data', {}).get('error_message') or
+                                status_data.get('error_message') or
+                                status_data.get('data', {}).get('msg') or
+                                status_data.get('msg')
+                            )
+                        
+                        # Check meta field for error message (common in some API responses)
+                        if not error_msg:
+                            meta = status_data.get('meta') or status_data.get('data', {}).get('meta')
+                            if meta and isinstance(meta, dict):
+                                meta_msg = meta.get('message') or meta.get('msg')
+                                if meta_msg and meta_msg.lower() != 'success':
+                                    error_msg = meta_msg
+                        
+                        # If still no error message, use a descriptive default
+                        if not error_msg:
+                            error_msg = f"Video generation failed with status: {video_status}"
+                        
+                        # Final safety check: never use "Success" as an error message
+                        if error_msg and error_msg.lower() == 'success':
+                            error_msg = f"Video generation failed with status: {video_status}"
+                        
                         job.status = "error"
                         job.progress = 0
                         job.completed_at = timezone.now()
@@ -1193,14 +1436,53 @@ class AvatarStatusView(APIView):
                                     job.save()
                                     print(f"✅ AvatarStatusView: Video job {job_id} updated to completed! Video URL: {video_url}, Thumbnail URL: {thumbnail_url}")
                                 elif video_status == 'failed' or video_status == 'error':
-                                    # Video failed
-                                    error_msg = (
-                                        status_data.get('data', {}).get('message') or 
-                                        status_data.get('message') or 
-                                        status_data.get('data', {}).get('error') or
-                                        status_data.get('error') or
-                                        'Video generation failed'
-                                    )
+                                    # Video failed - extract error message from various possible locations
+                                    error_msg = None
+                                    
+                                    # Try to get error message from error object first
+                                    error_obj = status_data.get('error') or status_data.get('data', {}).get('error')
+                                    if error_obj:
+                                        if isinstance(error_obj, dict):
+                                            error_msg = (
+                                                error_obj.get('message') or 
+                                                error_obj.get('msg') or 
+                                                error_obj.get('error') or
+                                                str(error_obj)
+                                            )
+                                        else:
+                                            error_msg = str(error_obj)
+                                    
+                                    # If no error object, try message field (but skip if it says "Success")
+                                    if not error_msg:
+                                        msg = status_data.get('data', {}).get('message') or status_data.get('message')
+                                        if msg and msg.lower() != 'success':
+                                            error_msg = msg
+                                    
+                                    # Try other error fields
+                                    if not error_msg:
+                                        error_msg = (
+                                            status_data.get('data', {}).get('error_message') or
+                                            status_data.get('error_message') or
+                                            status_data.get('data', {}).get('msg') or
+                                            status_data.get('msg')
+                                        )
+                                    
+                                    # Check meta field for error message (common in some API responses)
+                                    if not error_msg:
+                                        meta = status_data.get('meta') or status_data.get('data', {}).get('meta')
+                                        if meta and isinstance(meta, dict):
+                                            meta_msg = meta.get('message') or meta.get('msg')
+                                            if meta_msg and meta_msg.lower() != 'success':
+                                                error_msg = meta_msg
+                                    
+                                    # If still no error message, use a descriptive default
+                                    if not error_msg:
+                                        error_msg = f"Video generation failed with status: {video_status}"
+                                    
+                                    # Final safety check: never use "Success" as an error message
+                                    if error_msg and error_msg.lower() == 'success':
+                                        error_msg = f"Video generation failed with status: {video_status}"
+                                    
                                     job.status = "error"
                                     job.error_message = error_msg
                                     if not job.completed_at:
@@ -1322,18 +1604,73 @@ class AvatarStatusView(APIView):
                                 )
                                 
                                 if is_completed:
-                                    job.status = "completed"
-                                    job.progress = 100
-                                    if avatar_url:
-                                        job.avatar_url = avatar_url
-                                    if not job.completed_at:
-                                        job.completed_at = timezone.now()
+                                    # Use database-level locking to prevent concurrent uploads/avatar_group creation
+                                    should_upload = False
+                                    with transaction.atomic():
+                                        # Re-fetch job with lock to prevent race conditions
+                                        locked_job = AvatarGenerationJob.objects.select_for_update().get(job_id=job_id)
+                                        
+                                        # Check if job is already completed or has error - if so, skip processing
+                                        if locked_job.status in ['completed', 'error']:
+                                            print(f"ℹ️ AvatarStatusView: Job {job_id} is already {locked_job.status}, skipping upload/avatar_group creation")
+                                            job = locked_job
+                                            avatar_group_creation_needed = False
+                                        else:
+                                            # Save avatar URL first (while we have the lock)
+                                            if avatar_url:
+                                                locked_job.avatar_url = avatar_url[:2000] if len(avatar_url) > 2000 else avatar_url
+                                            
+                                            # Check if image_key is already set (upload already done) or is being uploaded
+                                            # Only one thread will pass this check due to the lock
+                                            marker_cleared = False
+                                            if locked_job.image_key:
+                                                # Check if it's a processing marker or a real image_key
+                                                if locked_job.image_key.startswith('UPLOADING_'):
+                                                    # Check if processing marker is stale (older than 5 minutes)
+                                                    try:
+                                                        marker_timestamp = int(locked_job.image_key.split('_')[1])
+                                                        current_timestamp = int(time.time() * 1000)
+                                                        if current_timestamp - marker_timestamp > 300000:  # 5 minutes in milliseconds
+                                                            print(f"⚠️ AvatarStatusView: Job {job_id} processing marker is stale (older than 5 minutes), clearing and retrying upload")
+                                                            locked_job.image_key = None
+                                                            locked_job.save(update_fields=['image_key'])
+                                                            marker_cleared = True
+                                                            # Will fall through to upload logic below
+                                                        else:
+                                                            print(f"ℹ️ AvatarStatusView: Job {job_id} is already being uploaded by another thread, skipping")
+                                                            avatar_group_creation_needed = False
+                                                            job = locked_job
+                                                    except (ValueError, IndexError):
+                                                        # Invalid marker format, clear it and retry
+                                                        print(f"⚠️ AvatarStatusView: Job {job_id} has invalid processing marker, clearing and retrying upload")
+                                                        locked_job.image_key = None
+                                                        locked_job.save(update_fields=['image_key'])
+                                                        marker_cleared = True
+                                                        # Will fall through to upload logic below
+                                                else:
+                                                    print(f"ℹ️ AvatarStatusView: Job {job_id} already has image_key: {locked_job.image_key}, skipping upload")
+                                                    avatar_group_creation_needed = False
+                                                    job = locked_job
+                                            
+                                            # If marker was cleared or image_key is None, proceed with upload
+                                            if (not locked_job.image_key or marker_cleared) and avatar_url:
+                                                # This thread will handle the upload - mark as processing IMMEDIATELY while lock is held
+                                                # This prevents other threads from starting upload
+                                                processing_marker = f"UPLOADING_{int(time.time() * 1000)}"
+                                                locked_job.image_key = processing_marker
+                                                locked_job.save(update_fields=['image_key', 'avatar_url'])
+                                                should_upload = True
+                                                job = locked_job
+                                                print(f"🔒 AvatarStatusView: Job {job_id} marked as uploading, proceeding with upload...")
+                                            else:
+                                                # No avatar_url or already processed
+                                                avatar_group_creation_needed = False
+                                                job = locked_job
                                     
-                                    # For prompt-based generation (no image_key), upload the generated avatar to HeyGen
-                                    # Refresh job from DB to avoid race conditions with concurrent uploads
-                                    job.refresh_from_db()
-                                    
-                                    if not job.image_key and avatar_url:
+                                    # Do upload/avatar_group creation OUTSIDE the transaction to avoid holding lock during HTTP requests
+                                    if should_upload:
+                                        # Need to upload and create avatar_group
+                                        avatar_group_creation_needed = True
                                         print(f"🔄 AvatarStatusView: Uploading generated avatar to HeyGen to save to account...")
                                         try:
                                             # Download the image from avatar_url
@@ -1376,63 +1713,166 @@ class AvatarStatusView(APIView):
                                                     if image_key:
                                                         print(f"✅ AvatarStatusView: Successfully uploaded avatar to HeyGen! Image key: {image_key}")
                                                         
-                                                        # Save image_key immediately to prevent duplicate uploads
-                                                        job.image_key = image_key
-                                                        job.save(update_fields=['image_key'])
+                                                        # Replace processing marker with real image_key
+                                                        # Use lock to atomically update image_key
+                                                        with transaction.atomic():
+                                                            job_check = AvatarGenerationJob.objects.select_for_update().get(job_id=job_id)
+                                                            # Check if it's still our processing marker or was already set by another thread
+                                                            if job_check.image_key and job_check.image_key.startswith('UPLOADING_'):
+                                                                # This is our processing marker, replace it with real image_key
+                                                                job_check.image_key = image_key
+                                                                job_check.save(update_fields=['image_key'])
+                                                                job = job_check
+                                                                print(f"✅ AvatarStatusView: Job {job_id} image_key updated from processing marker to: {image_key}")
+                                                            elif job_check.image_key and not job_check.image_key.startswith('UPLOADING_'):
+                                                                # Another thread already set a real image_key (shouldn't happen, but handle it)
+                                                                print(f"ℹ️ AvatarStatusView: Job {job_id} image_key was already set by another thread: {job_check.image_key}")
+                                                                image_key = job_check.image_key  # Use the existing one
+                                                                job = job_check
+                                                                avatar_group_creation_needed = False  # Skip avatar_group creation
+                                                            else:
+                                                                # No image_key set (unlikely, but handle it)
+                                                                job_check.image_key = image_key
+                                                                job_check.save(update_fields=['image_key'])
+                                                                job = job_check
+                                                                print(f"✅ AvatarStatusView: Job {job_id} image_key set to: {image_key}")
                                                         
-                                                        # Create avatar_group using the uploaded image_key
-                                                        avatar_group_url = "https://api.heygen.com/v2/photo_avatar/avatar_group/create"
-                                                        avatar_group_headers = {
-                                                            'accept': 'application/json',
-                                                            'content-type': 'application/json',
-                                                            'x-api-key': heygen_api_key
-                                                        }
-                                                        avatar_group_payload = {
-                                                            "name": job.name if job.name else "Generated Avatar",
-                                                            "image_key": image_key
-                                                        }
-                                                        
-                                                        print(f"📤 AvatarStatusView: Creating avatar_group with payload: {avatar_group_payload}")
-                                                        avatar_group_response = requests.post(
-                                                            avatar_group_url,
-                                                            headers=avatar_group_headers,
-                                                            json=avatar_group_payload,
-                                                            timeout=30
-                                                        )
-                                                        
-                                                        if avatar_group_response.status_code == 200:
-                                                            avatar_group_data = avatar_group_response.json()
-                                                            print(f"📥 AvatarStatusView: Avatar group response: {avatar_group_data}")
-                                                            group_id = (
-                                                                avatar_group_data.get('data', {}).get('id') or
-                                                                avatar_group_data.get('data', {}).get('group_id') or
-                                                                avatar_group_data.get('id') or
-                                                                avatar_group_data.get('group_id')
+                                                        # Create avatar_group only if we just set the image_key
+                                                        if avatar_group_creation_needed:
+                                                            # Create avatar_group using the uploaded image_key
+                                                            avatar_group_url = "https://api.heygen.com/v2/photo_avatar/avatar_group/create"
+                                                            avatar_group_headers = {
+                                                                'accept': 'application/json',
+                                                                'content-type': 'application/json',
+                                                                'x-api-key': heygen_api_key
+                                                            }
+                                                            avatar_group_payload = {
+                                                                "name": job.name if job.name else "Generated Avatar",
+                                                                "image_key": image_key
+                                                            }
+                                                            
+                                                            print(f"📤 AvatarStatusView: Creating avatar_group with payload: {avatar_group_payload}")
+                                                            avatar_group_response = requests.post(
+                                                                avatar_group_url,
+                                                                headers=avatar_group_headers,
+                                                                json=avatar_group_payload,
+                                                                timeout=30
                                                             )
                                                             
-                                                            if group_id:
-                                                                print(f"✅ AvatarStatusView: Successfully created avatar_group with ID: {group_id} (saved to account)")
-                                                                # Update job with avatar_group details
-                                                                job.generation_id = str(group_id)  # Update to avatar_group ID
-                                                                # Keep the original avatar_url for display
+                                                            if avatar_group_response.status_code == 200:
+                                                                avatar_group_data = avatar_group_response.json()
+                                                                print(f"📥 AvatarStatusView: Avatar group response: {avatar_group_data}")
+                                                                group_id = (
+                                                                    avatar_group_data.get('data', {}).get('id') or
+                                                                    avatar_group_data.get('data', {}).get('group_id') or
+                                                                    avatar_group_data.get('id') or
+                                                                    avatar_group_data.get('group_id')
+                                                                )
+                                                                
+                                                                if group_id:
+                                                                    print(f"✅ AvatarStatusView: Successfully created avatar_group with ID: {group_id} (saved to account)")
+                                                                    # Update job with avatar_group details
+                                                                    with transaction.atomic():
+                                                                        job_update = AvatarGenerationJob.objects.select_for_update().get(job_id=job_id)
+                                                                        job_update.generation_id = str(group_id)
+                                                                        job_update.save(update_fields=['generation_id'])
+                                                                        job = job_update
+                                                                    # Keep the original avatar_url for display
+                                                                    avatar_group_creation_needed = False  # Successfully created
+                                                                else:
+                                                                    print(f"⚠️ AvatarStatusView: Failed to get group_id from avatar_group response: {avatar_group_response.text[:200]}")
+                                                                    # Don't mark as error if group_id is missing - might still be processing
+                                                                    # Keep avatar_group_creation_needed = True to continue checking
                                                             else:
-                                                                print(f"⚠️ AvatarStatusView: Failed to get group_id from avatar_group response: {avatar_group_response.text[:200]}")
+                                                                # Avatar group creation failed - extract error message and mark job as error
+                                                                try:
+                                                                    error_response = avatar_group_response.json() if avatar_group_response.text else {}
+                                                                    error_data = error_response.get('error', {}) or error_response.get('data', {})
+                                                                    error_msg = (
+                                                                        error_data.get('message') or 
+                                                                        error_response.get('message') or 
+                                                                        f"Failed to create avatar_group: {avatar_group_response.status_code}"
+                                                                    )
+                                                                except:
+                                                                    error_msg = f"Failed to create avatar_group: {avatar_group_response.status_code} - {avatar_group_response.text[:200]}"
+                                                                
+                                                                print(f"❌ AvatarStatusView: Failed to create avatar_group: {avatar_group_response.status_code} - {error_msg}")
+                                                                
+                                                                # Mark job as error since avatar_group creation failed
+                                                                # But preserve avatar_url so user can still access the generated avatar
+                                                                with transaction.atomic():
+                                                                    job_error = AvatarGenerationJob.objects.select_for_update().get(job_id=job_id)
+                                                                    job_error.status = "error"
+                                                                    job_error.progress = 0
+                                                                    job_error.completed_at = timezone.now()
+                                                                    job_error.error_message = error_msg
+                                                                    # Ensure avatar_url is preserved (it should already be set, but be explicit)
+                                                                    if avatar_url and not job_error.avatar_url:
+                                                                        job_error.avatar_url = avatar_url[:2000] if len(avatar_url) > 2000 else avatar_url
+                                                                    job_error.save()
+                                                                    job = job_error
+                                                                print(f"❌ AvatarStatusView: Job {job_id} marked as error: {error_msg} (avatar_url preserved: {bool(job.avatar_url)})")
+                                                                avatar_group_creation_needed = False
                                                         else:
-                                                            print(f"⚠️ AvatarStatusView: Failed to create avatar_group: {avatar_group_response.status_code} - {avatar_group_response.text[:200]}")
+                                                            print(f"ℹ️ AvatarStatusView: Skipping avatar_group creation - image_key was already set by another thread")
                                                     else:
                                                         print(f"⚠️ AvatarStatusView: No image_key in upload response: {upload_data}")
+                                                        # Upload failed - clear processing marker
+                                                        with transaction.atomic():
+                                                            job_fail = AvatarGenerationJob.objects.select_for_update().get(job_id=job_id)
+                                                            if job_fail.image_key and job_fail.image_key.startswith('UPLOADING_'):
+                                                                job_fail.image_key = None  # Clear processing marker
+                                                                job_fail.save(update_fields=['image_key'])
+                                                        # Upload failed but we have avatar_url - mark as completed anyway
+                                                        avatar_group_creation_needed = False
                                                 else:
                                                     print(f"⚠️ AvatarStatusView: Failed to upload image to HeyGen: {upload_response.status_code} - {upload_response.text[:200]}")
+                                                    # Upload failed - clear processing marker
+                                                    with transaction.atomic():
+                                                        job_fail = AvatarGenerationJob.objects.select_for_update().get(job_id=job_id)
+                                                        if job_fail.image_key and job_fail.image_key.startswith('UPLOADING_'):
+                                                            job_fail.image_key = None  # Clear processing marker
+                                                            job_fail.save(update_fields=['image_key'])
+                                                    # Upload failed but we have avatar_url - mark as completed anyway
+                                                    avatar_group_creation_needed = False
                                             else:
                                                 print(f"⚠️ AvatarStatusView: Failed to download image from {avatar_url}: {img_response.status_code}")
+                                                # Download failed - clear processing marker
+                                                with transaction.atomic():
+                                                    job_fail = AvatarGenerationJob.objects.select_for_update().get(job_id=job_id)
+                                                    if job_fail.image_key and job_fail.image_key.startswith('UPLOADING_'):
+                                                        job_fail.image_key = None  # Clear processing marker
+                                                        job_fail.save(update_fields=['image_key'])
+                                                # Download failed but we have avatar_url - mark as completed anyway
+                                                avatar_group_creation_needed = False
                                         except Exception as upload_error:
                                             print(f"⚠️ AvatarStatusView: Error uploading generated avatar to HeyGen: {str(upload_error)}")
                                             import traceback
                                             print(traceback.format_exc())
-                                            # Continue anyway - at least we have the avatar_url
+                                            # Upload error - clear processing marker
+                                            try:
+                                                with transaction.atomic():
+                                                    job_fail = AvatarGenerationJob.objects.select_for_update().get(job_id=job_id)
+                                                    if job_fail.image_key and job_fail.image_key.startswith('UPLOADING_'):
+                                                        job_fail.image_key = None  # Clear processing marker
+                                                        job_fail.save(update_fields=['image_key'])
+                                            except Exception as clear_error:
+                                                print(f"⚠️ AvatarStatusView: Failed to clear processing marker: {str(clear_error)}")
+                                            # Upload error but we have avatar_url - mark as completed anyway
+                                            avatar_group_creation_needed = False
                                     
-                                    job.save()
-                                    print(f"✅ AvatarStatusView: Job {job_id} updated to completed!")
+                                    # Re-fetch job to get latest state
+                                    job = AvatarGenerationJob.objects.get(job_id=job_id)
+                                    
+                                    # Only mark as completed if avatar_group creation succeeded or wasn't needed, and job is not already marked as error
+                                    if not avatar_group_creation_needed and job.status != "error":
+                                        job.status = "completed"
+                                        job.progress = 100
+                                        if not job.completed_at:
+                                            job.completed_at = timezone.now()
+                                        job.save()
+                                        print(f"✅ AvatarStatusView: Job {job_id} updated to completed!")
+                                    # If job is marked as error, it will be returned with error status below
                                 elif generation_status == 'failed' or generation_status == 'error':
                                     job.status = "error"
                                     job.error_message = status_data.get('data', {}).get('message') or status_data.get('message', 'Avatar generation failed')
@@ -2331,6 +2771,311 @@ class AvatarPromptGenerationView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
+
+def generate_avatar_script_variations(base_script='', tone='', audience='', additional_context='', script_type_prompt=''):
+    """Generate three enhanced avatar video scripts using OpenAI
+    
+    Args:
+        base_script: Optional script provided by user for enhancement
+        tone: Desired tone for the script
+        audience: Target audience for the script
+        additional_context: Additional context to incorporate
+        script_type_prompt: User's description of what type of script they want (used when base_script is not provided)
+    """
+    try:
+        openai_api_key = os.getenv('OPENAI_API_KEY')
+        if not openai_api_key:
+            print("⚠️ OpenAI API key not configured - returning fallback variations")
+            if base_script and base_script.strip():
+                base = base_script.strip()
+                variations = [
+                    base,
+                    f"{base}\n\n[Style tweak: Emphasize clarity and friendly tone.]",
+                    f"{base}\n\n[Call-to-action suggestion: Encourage the audience to take the next step.]"
+                ]
+                return [v.strip() for v in variations if v.strip()]
+            else:
+                # Fallback when no base script is provided
+                return [
+                    "Welcome to our presentation. Today, we'll explore exciting opportunities.",
+                    "Thank you for joining us. Let's dive into what makes this special.",
+                    "Hello and welcome. We're here to share something important with you."
+                ]
+        
+        client = openai.OpenAI(api_key=openai_api_key)
+        
+        # Determine if we're enhancing an existing script or generating from scratch
+        has_base_script = base_script and base_script.strip()
+        has_script_type_prompt = script_type_prompt and script_type_prompt.strip()
+        
+        if has_base_script:
+            # Mode 1: Enhance user-provided script
+            system_prompt = (
+                "You are an expert copywriter who crafts concise, engaging voiceover scripts for AI avatar videos. "
+                "Your task is to enhance and polish the user's provided script while keeping the core message intact. "
+                "Keep it conversational, ensure it sounds natural when spoken aloud, and always produce exactly three distinct script variations."
+            )
+        elif has_script_type_prompt:
+            # Mode 2: Generate script based on user's description
+            system_prompt = (
+                "You are an expert copywriter who crafts concise, engaging voiceover scripts for AI avatar videos. "
+                "Your task is to generate three distinct script variations based on the user's description of what type of script they want. "
+                "Create scripts that are conversational, natural when spoken aloud, and tailored to the user's requirements. "
+                "Always produce exactly three distinct script variations."
+            )
+        else:
+            # Fallback: generate generic scripts
+            system_prompt = (
+                "You are an expert copywriter who crafts concise, engaging voiceover scripts for AI avatar videos. "
+                "Create conversational scripts that sound natural when spoken aloud. "
+                "Always produce exactly three distinct script variations."
+            )
+        
+        tone_instruction = tone.strip() if tone else "Use a confident, friendly, and professional tone."
+        audience_instruction = (
+            f"The intended audience is: {audience.strip()}." if audience else
+            "Write for a broad professional audience."
+        )
+        context_instruction = (
+            f"Additional context to weave in: {additional_context.strip()}." if additional_context else
+            "No additional context provided."
+        )
+        
+        # Build user prompt based on the mode
+        if has_base_script:
+            # Enhancement mode
+            user_prompt = f"""Original script provided by the user:
+\"\"\"{base_script.strip()}\"\"\"
+
+Please enhance and polish this script while keeping the core message intact. Produce THREE distinct improved scripts.
+
+Guidelines:
+- {tone_instruction}
+- {audience_instruction}
+- {context_instruction}
+- Keep the length between 90 and 220 words unless the original script is shorter. If the original script is shorter, expand it naturally.
+- Maintain the original language (if the input is Hindi, reply in Hindi, etc.).
+- Use short, natural sentences that sound great when spoken.
+- Include a clear call-to-action if the original script implies one.
+- Do not add stage directions or camera instructions.
+- Do not wrap the output in quotes or markdown.
+
+Return exactly three enhanced scripts separated by the delimiter <|||>. Do NOT number them. Do NOT add extra text outside the scripts.
+
+Enhanced Scripts:"""
+        elif has_script_type_prompt:
+            # Generation mode based on user's description
+            user_prompt = f"""User's description of the script they want:
+\"\"\"{script_type_prompt.strip()}\"\"\"
+
+Please generate THREE distinct script variations based on the above description. Create engaging, natural-sounding voiceover scripts for AI avatar videos.
+
+Guidelines:
+- {tone_instruction}
+- {audience_instruction}
+- {context_instruction}
+- Keep the length between 90 and 220 words.
+- Use short, natural sentences that sound great when spoken.
+- Include a clear call-to-action if appropriate for the script type.
+- Do not add stage directions or camera instructions.
+- Do not wrap the output in quotes or markdown.
+- Ensure each variation has a distinct approach while meeting the user's requirements.
+
+Return exactly three distinct scripts separated by the delimiter <|||>. Do NOT number them. Do NOT add extra text outside the scripts.
+
+Generated Scripts:"""
+        else:
+            # Generic generation mode
+            user_prompt = f"""Please generate THREE distinct engaging voiceover scripts for AI avatar videos.
+
+Guidelines:
+- {tone_instruction}
+- {audience_instruction}
+- {context_instruction}
+- Keep the length between 90 and 220 words.
+- Use short, natural sentences that sound great when spoken.
+- Include a clear call-to-action.
+- Do not add stage directions or camera instructions.
+- Do not wrap the output in quotes or markdown.
+
+Return exactly three distinct scripts separated by the delimiter <|||>. Do NOT number them. Do NOT add extra text outside the scripts.
+
+Generated Scripts:"""
+        
+        max_retries = 3
+        response = None
+        for attempt in range(max_retries):
+            try:
+                response = client.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    temperature=0.75,
+                    max_tokens=600,
+                    top_p=0.9,
+                    frequency_penalty=0.2,
+                    presence_penalty=0.2
+                )
+                break
+            except Exception as api_error:
+                print(f"⚠️ Script generation attempt {attempt + 1} failed: {str(api_error)}")
+                if attempt < max_retries - 1:
+                    time.sleep(1)
+                else:
+                    raise api_error
+        
+        enhanced_output = response.choices[0].message.content.strip()
+        # Handle both "Enhanced Scripts:" and "Generated Scripts:" prefixes
+        if enhanced_output.lower().startswith("enhanced scripts:"):
+            enhanced_output = enhanced_output.split(":", 1)[1].strip()
+        elif enhanced_output.lower().startswith("generated scripts:"):
+            enhanced_output = enhanced_output.split(":", 1)[1].strip()
+        
+        def _split_variations(text):
+            if not text:
+                return []
+            cleaned = text.replace("|||", "<|||>")
+            segments = [segment.strip() for segment in cleaned.split("<|||>") if segment.strip()]
+            if len(segments) >= 3:
+                return segments[:3]
+            if len(segments) == 2:
+                merged_segments = []
+                for seg in segments:
+                    parts = [part.strip(" -*\t") for part in seg.split("\n\n") if part.strip()]
+                    if len(parts) > 1:
+                        merged_segments.extend(parts)
+                    else:
+                        merged_segments.append(seg)
+                if len(merged_segments) >= 3:
+                    return merged_segments[:3]
+            sentences = [sentence.strip() for sentence in cleaned.replace("\r", " ").split(". ") if sentence.strip()]
+            if len(sentences) >= 3:
+                approx_chunk = max(1, len(sentences) // 3)
+                chunked = []
+                for i in range(0, len(sentences), approx_chunk):
+                    chunked.append(". ".join(sentences[i:i+approx_chunk]).strip())
+                if len(chunked) >= 3:
+                    return chunked[:3]
+            paragraphs = [para.strip() for para in cleaned.split("\n\n") if para.strip()]
+            if len(paragraphs) >= 3:
+                return paragraphs[:3]
+            return segments
+        
+        raw_variations = _split_variations(enhanced_output)
+
+        if not raw_variations:
+            # Fallback based on what was provided
+            if base_script and base_script.strip():
+                raw_variations = [base_script.strip()]
+            elif script_type_prompt and script_type_prompt.strip():
+                raw_variations = [
+                    f"Script based on: {script_type_prompt.strip()[:100]}...",
+                    f"Alternative approach for: {script_type_prompt.strip()[:100]}...",
+                    f"Creative variation of: {script_type_prompt.strip()[:100]}..."
+                ]
+            else:
+                raw_variations = [
+                    "Welcome to our presentation. Today, we'll explore exciting opportunities.",
+                    "Thank you for joining us. Let's dive into what makes this special.",
+                    "Hello and welcome. We're here to share something important with you."
+                ]
+        
+        print("=" * 80)
+        print("📝 ENHANCED AVATAR SCRIPTS GENERATED")
+        print("=" * 80)
+        for idx, script in enumerate(raw_variations, 1):
+            print(f"[Variant {idx}] {script[:120]}{'...' if len(script) > 120 else ''}")
+        print("=" * 80)
+        
+        return raw_variations[:3]
+    
+    except Exception as e:
+        print(f"❌ Error generating avatar script: {str(e)}")
+        import traceback
+        print(f"📋 Full traceback: {traceback.format_exc()}")
+        # Return appropriate fallback based on what was provided
+        if base_script and base_script.strip():
+            return [base_script.strip()]
+        elif script_type_prompt and script_type_prompt.strip():
+            return [
+                f"Script based on: {script_type_prompt.strip()[:100]}...",
+                f"Alternative approach for: {script_type_prompt.strip()[:100]}...",
+                f"Creative variation of: {script_type_prompt.strip()[:100]}..."
+            ]
+        else:
+            return [
+                "Welcome to our presentation. Today, we'll explore exciting opportunities.",
+                "Thank you for joining us. Let's dive into what makes this special.",
+                "Hello and welcome. We're here to share something important with you."
+            ]
+
+
+def refine_avatar_script_with_openai(base_script, additional_details, tone=''):
+    """Refine an avatar narration script with additional user-supplied details"""
+    try:
+        openai_api_key = os.getenv('OPENAI_API_KEY')
+        if not openai_api_key:
+            print("⚠️ OpenAI API key not configured - returning combined script")
+            return f"{base_script.strip()}\n\n[Incorporate: {additional_details.strip()}]"
+        
+        client = openai.OpenAI(api_key=openai_api_key)
+        tone_instruction = tone.strip() if tone else "Keep the tone consistent with the original script."
+        
+        user_prompt = f"""Original avatar narration script:
+\"\"\"{base_script.strip()}\"\"\"
+
+Additional instructions from user:
+\"\"\"{additional_details.strip()}\"\"\"
+
+Task:
+- Produce ONE refined version of the script that naturally incorporates the additional instructions.
+- {tone_instruction}
+- Keep it concise (90-220 words if possible), conversational, and suitable for AI avatar narration.
+- Maintain the original language (if input is Hindi, reply in Hindi, etc.).
+- Use short sentences that sound natural when spoken.
+- Avoid adding scene directions, camera notes, or markdown formatting.
+- Respond with ONLY the refined script (no preamble, numbering, or labels)."""
+        
+        max_retries = 3
+        response = None
+        for attempt in range(max_retries):
+            try:
+                response = client.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    messages=[
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    temperature=0.7,
+                    max_tokens=500,
+                    top_p=0.9,
+                    frequency_penalty=0.1,
+                    presence_penalty=0.2
+                )
+                break
+            except Exception as api_error:
+                print(f"⚠️ Script refinement attempt {attempt + 1} failed: {str(api_error)}")
+                if attempt < max_retries - 1:
+                    time.sleep(1)
+                else:
+                    raise api_error
+        
+        refined_script = response.choices[0].message.content.strip()
+        print("=" * 80)
+        print("✨ REFINED AVATAR SCRIPT GENERATED")
+        print("=" * 80)
+        print(refined_script[:500])
+        print("=" * 80)
+        return refined_script
+    
+    except Exception as e:
+        print(f"❌ Error refining avatar script: {str(e)}")
+        import traceback
+        print(f"📋 Full traceback: {traceback.format_exc()}")
+        return f"{base_script.strip()}\n\n{additional_details.strip()}"
+
+
 def refine_avatar_prompt_with_openai(base_prompt, additional_details):
     """Refine a selected avatar prompt with additional user details using OpenAI
     
@@ -2510,3 +3255,130 @@ class RefineAvatarPromptView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
+
+class AvatarScriptGenerationView(APIView):
+    """Generate an enhanced script for avatar video narration
+    
+    Accepts either:
+    - 'script': User-provided script to enhance
+    - 'script_type_prompt': Description of what type of script the user wants (used when script is not provided)
+    """
+    
+    def post(self, request):
+        try:
+            user = get_current_user(request)
+            if not user:
+                return Response(
+                    ResponseInfo.error("Authentication required"),
+                    status=status.HTTP_401_UNAUTHORIZED
+                )
+            
+            script_text = request.data.get('script', '')
+            script_type_prompt = request.data.get('script_type_prompt', '')
+            tone = request.data.get('tone', '')
+            audience = request.data.get('audience', '')
+            additional_context = request.data.get('additional_context', '')
+            
+            # Validate that at least one of script or script_type_prompt is provided
+            has_script = script_text and script_text.strip()
+            has_script_type_prompt = script_type_prompt and script_type_prompt.strip()
+            
+            if not has_script and not has_script_type_prompt:
+                return Response(
+                    ResponseInfo.error("Either 'script' (for enhancement) or 'script_type_prompt' (for generation) is required"),
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            print("🧠 Generating enhanced avatar script with OpenAI...")
+            script_variations = generate_avatar_script_variations(
+                base_script=script_text if has_script else '',
+                tone=tone,
+                audience=audience,
+                additional_context=additional_context,
+                script_type_prompt=script_type_prompt if has_script_type_prompt else ''
+            )
+            
+            response_data = {
+                "script_variations": script_variations,
+                "metadata": {
+                    "tone": tone,
+                    "audience": audience,
+                    "additional_context": additional_context,
+                    "mode": "enhancement" if has_script else "generation"
+                }
+            }
+            
+            # Include original script or script type prompt in response
+            if has_script:
+                response_data["original_script"] = script_text
+            if has_script_type_prompt:
+                response_data["script_type_prompt"] = script_type_prompt
+            
+            return Response(
+                ResponseInfo.success(response_data, "Script variations generated successfully"),
+                status=status.HTTP_200_OK
+            )
+        
+        except Exception as e:
+            print(f"❌ Error generating enhanced avatar script: {str(e)}")
+            import traceback
+            print(f"📋 Full traceback: {traceback.format_exc()}")
+            return Response(
+                ResponseInfo.error(f"Failed to generate script: {str(e)}"),
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class AvatarScriptRefinementView(APIView):
+    """Refine a selected avatar script with additional details"""
+    
+    def post(self, request):
+        try:
+            user = get_current_user(request)
+            if not user:
+                return Response(
+                    ResponseInfo.error("Authentication required"),
+                    status=status.HTTP_401_UNAUTHORIZED
+                )
+            
+            base_script = request.data.get('base_script', '')
+            additional_details = request.data.get('additional_details', '')
+            tone = request.data.get('tone', '')
+            
+            if not base_script or not base_script.strip():
+                return Response(
+                    ResponseInfo.error("Base script is required"),
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            if not additional_details or not additional_details.strip():
+                return Response(
+                    ResponseInfo.error("Additional details are required to refine the script"),
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            refined_script = refine_avatar_script_with_openai(
+                base_script,
+                additional_details,
+                tone=tone
+            )
+            
+            response_data = {
+                "base_script": base_script,
+                "additional_details": additional_details,
+                "refined_script": refined_script
+            }
+            
+            return Response(
+                ResponseInfo.success(response_data, "Avatar script refined successfully"),
+                status=status.HTTP_200_OK
+            )
+        
+        except Exception as e:
+            print(f"❌ Error refining avatar script: {str(e)}")
+            import traceback
+            print(f"📋 Full traceback: {traceback.format_exc()}")
+            return Response(
+                ResponseInfo.error(f"Failed to refine script: {str(e)}"),
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
