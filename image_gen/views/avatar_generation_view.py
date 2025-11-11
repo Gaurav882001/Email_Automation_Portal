@@ -2771,7 +2771,6 @@ class AvatarPromptGenerationView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
-
 def generate_avatar_script_variations(base_script='', tone='', audience='', additional_context='', script_type_prompt=''):
     """Generate three enhanced avatar video scripts using OpenAI
     
@@ -2992,7 +2991,7 @@ Generated Scripts:"""
         return raw_variations[:3]
     
     except Exception as e:
-        print(f"❌ Error generating avatar script: {str(e)}")
+        print(f"Error generating avatar script: {str(e)}")
         import traceback
         print(f"📋 Full traceback: {traceback.format_exc()}")
         # Return appropriate fallback based on what was provided
@@ -3017,7 +3016,7 @@ def refine_avatar_script_with_openai(base_script, additional_details, tone=''):
     try:
         openai_api_key = os.getenv('OPENAI_API_KEY')
         if not openai_api_key:
-            print("⚠️ OpenAI API key not configured - returning combined script")
+            print("OpenAI API key not configured - returning combined script")
             return f"{base_script.strip()}\n\n[Incorporate: {additional_details.strip()}]"
         
         client = openai.OpenAI(api_key=openai_api_key)
@@ -3055,7 +3054,7 @@ Task:
                 )
                 break
             except Exception as api_error:
-                print(f"⚠️ Script refinement attempt {attempt + 1} failed: {str(api_error)}")
+                print(f"Script refinement attempt {attempt + 1} failed: {str(api_error)}")
                 if attempt < max_retries - 1:
                     time.sleep(1)
                 else:
@@ -3070,9 +3069,9 @@ Task:
         return refined_script
     
     except Exception as e:
-        print(f"❌ Error refining avatar script: {str(e)}")
+        print(f"Error refining avatar script: {str(e)}")
         import traceback
-        print(f"📋 Full traceback: {traceback.format_exc()}")
+        print(f"Full traceback: {traceback.format_exc()}")
         return f"{base_script.strip()}\n\n{additional_details.strip()}"
 
 
