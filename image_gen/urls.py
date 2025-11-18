@@ -3,8 +3,8 @@ from rest_framework.decorators import api_view
 
 from .views import auth_view, general_view
 from .views.image_generation_view import ImageGenerationView, ImageStatusView, JobListView, RetryJobView, DeleteJobView, DashboardStatsView, PromptGenerationView, RefinePromptView
-from .views.video_generation_view import VideoGenerationView, VideoStatusView, VideoJobListView, VideoRetryJobView, VideoDeleteJobView, VideoDashboardStatsView, VideoPromptGenerationView, RefineVideoPromptView
-from .views.avatar_generation_view import AvatarGenerationView, AvatarStatusView, AvatarJobListView, AvatarRetryJobView, AvatarDeleteJobView, AvatarImageView, AvatarVoicesView, AvatarPromptGenerationView, RefineAvatarPromptView, AvatarScriptGenerationView, AvatarScriptRefinementView
+from .views.video_generation_view import VideoGenerationView, VideoStatusView, VideoJobListView, VideoRetryJobView, VideoDeleteJobView, VideoDashboardStatsView, VideoPromptGenerationView, RefineVideoPromptView, VideoExtendView
+from .views.avatar_generation_view import AvatarGenerationView, AvatarStatusView, AvatarJobListView, AvatarRetryJobView, AvatarDeleteJobView, AvatarImageView, AvatarImageFromHeyGenView, AvatarVoicesView, AvatarListFromHeyGenView, AssetListFromHeyGenView, AvatarPromptGenerationView, RefineAvatarPromptView, AvatarScriptGenerationView, AvatarScriptRefinementView
 
 urlpatterns = [
     
@@ -39,6 +39,7 @@ urlpatterns = [
     path('retry-video-job/<str:job_id>/', VideoRetryJobView.as_view(), name='retry-video-job'),
     path('delete-video-job/<str:job_id>/', VideoDeleteJobView.as_view(), name='delete-video-job'),
     path('video-dashboard-stats/', VideoDashboardStatsView.as_view(), name='video-dashboard-stats'),
+    path('extend-video/', VideoExtendView.as_view(), name='extend-video'),
     
     # Video prompt generation
     path('generate-video-prompts/', VideoPromptGenerationView.as_view(), name='generate-video-prompts'),
@@ -51,7 +52,10 @@ urlpatterns = [
     path('retry-avatar-job/<str:job_id>/', AvatarRetryJobView.as_view(), name='retry-avatar-job'),
     path('delete-avatar-job/<str:job_id>/', AvatarDeleteJobView.as_view(), name='delete-avatar-job'),
     path('avatar-images/<str:generation_id>/', AvatarImageView.as_view(), name='avatar-images'),
+    path('avatar-image-heygen/<str:avatar_id>/', AvatarImageFromHeyGenView.as_view(), name='avatar-image-heygen'),
     path('avatar-voices/', AvatarVoicesView.as_view(), name='avatar-voices'),
+    path('avatar-list-heygen/', AvatarListFromHeyGenView.as_view(), name='avatar-list-heygen'),
+    path('asset-list-heygen/', AssetListFromHeyGenView.as_view(), name='asset-list-heygen'),
     
     # Avatar prompt generation
     path('generate-avatar-prompts/', AvatarPromptGenerationView.as_view(), name='generate-avatar-prompts'),

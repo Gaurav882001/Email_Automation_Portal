@@ -6,9 +6,11 @@ import threading
 import requests
 import time
 import openai
+import re
+import json
 from django.conf import settings
 from django.utils import timezone
-from django.db import transaction
+from django.db import transaction, models
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -585,25 +587,95 @@ class AvatarGenerationView(APIView):
                         status=status.HTTP_400_BAD_REQUEST
                     )
                 
-                # Validate required video fields
-                if not video_payload.get('video_inputs') or len(video_payload.get('video_inputs', [])) == 0:
-                    return Response(
-                        ResponseInfo.error("video_inputs is required for video generation"),
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
+                # Check API version and validate accordingly
+                api_version = video_payload.get('api_version', 'v4')
                 
-                video_input = video_payload['video_inputs'][0]
-                if not video_input.get('voice') or not video_input['voice'].get('voice_id'):
-                    return Response(
-                        ResponseInfo.error("voice_id is required in video_inputs"),
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
-                
-                if not video_input.get('character') or not (video_input['character'].get('avatar_id') or video_input['character'].get('talking_photo_id')):
-                    return Response(
-                        ResponseInfo.error("avatar_id or talking_photo_id is required in character"),
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
+                if api_version == 'v2':
+                    # V2 API validation
+                    if not video_payload.get('voice_id'):
+                        return Response(
+                            ResponseInfo.error("voice_id is required for video generation"),
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+                    
+                    if not video_payload.get('input_text'):
+                        return Response(
+                            ResponseInfo.error("input_text is required for video generation"),
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+                    
+                    # Check for avatar_id or talking_photo_id based on type
+                    avatar_type = video_payload.get('type', 'avatar')
+                    if avatar_type == 'avatar' and not video_payload.get('avatar_id'):
+                        return Response(
+                            ResponseInfo.error("avatar_id is required for video generation"),
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+                    elif avatar_type == 'talking_photo' and not video_payload.get('talking_photo_id'):
+                        return Response(
+                            ResponseInfo.error("talking_photo_id is required for video generation"),
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+                    
+                    # Validate text display fields
+                    text_type = video_payload.get('text_type', 'text')
+                    if text_type != 'text':
+                        return Response(
+                            ResponseInfo.error("text_type must be 'text'"),
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+                    
+                    text_content = video_payload.get('text_content', '')
+                    if not text_content or len(str(text_content)) == 0:
+                        return Response(
+                            ResponseInfo.error("text_content is required for video generation"),
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+                    
+                    # Validate line_height
+                    line_height = video_payload.get('line_height')
+                    if line_height is None:
+                        return Response(
+                            ResponseInfo.error("line_height is required for video generation"),
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+                    try:
+                        line_height_float = float(line_height)
+                        if line_height_float <= 0.0:
+                            return Response(
+                                ResponseInfo.error("line_height must be greater than 0.0"),
+                                status=status.HTTP_400_BAD_REQUEST
+                            )
+                    except (ValueError, TypeError):
+                        return Response(
+                            ResponseInfo.error("line_height must be a valid number greater than 0.0"),
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+                else:
+                    # V4 API validation
+                    if not video_payload.get('image_key'):
+                        return Response(
+                            ResponseInfo.error("image_key is required for video generation"),
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+                    
+                    if not video_payload.get('script'):
+                        return Response(
+                            ResponseInfo.error("script is required for video generation"),
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+                    
+                    if not video_payload.get('voice_id'):
+                        return Response(
+                            ResponseInfo.error("voice_id is required for video generation"),
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+                    
+                    if not video_payload.get('video_orientation'):
+                        return Response(
+                            ResponseInfo.error("video_orientation is required for video generation"),
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
                 
                 # Get HeyGen API key
                 heygen_api_key = os.getenv('HEYGEN_API_KEY')
@@ -621,7 +693,7 @@ class AvatarGenerationView(APIView):
                     job_id=job_id,
                     user=user,
                     prompt="",  # Not used for video generation
-                    name=video_input.get('voice', {}).get('input_text', 'Avatar Video')[:100],
+                    name=video_payload.get('video_title', 'Avatar Video')[:100],
                     status="queued",
                     progress=0,
                     provider="heygen_video"
@@ -1067,19 +1139,151 @@ class AvatarGenerationView(APIView):
             job.started_at = timezone.now()
             job.save()
             
-            # Call HeyGen video generation API
-            video_url = "https://api.heygen.com/v2/video/generate"
-            headers = {
-                "accept": "application/json",
-                "content-type": "application/json",
-                "x-api-key": api_key
-            }
+            # Check API version from payload
+            api_version = video_payload.get('api_version', 'v4')
             
-            print(f"📤 Calling HeyGen video generation API...")
-            print(f"📋 Payload: {video_payload}")
+            if api_version == 'v2':
+                # V2 API endpoint
+                video_url = "https://api.heygen.com/v2/video/generate"
+                headers = {
+                    "accept": "application/json",
+                    "content-type": "application/json",
+                    "x-api-key": api_key
+                }
+                
+                # Get dimension values
+                dimension_width = video_payload.get('dimension', {}).get('width', 1280) if isinstance(video_payload.get('dimension'), dict) else video_payload.get('dimension_width', 1280)
+                dimension_height = video_payload.get('dimension', {}).get('height', 720) if isinstance(video_payload.get('dimension'), dict) else video_payload.get('dimension_height', 720)
+                
+                # Get avatar type and ID
+                avatar_type = video_payload.get('type', 'avatar')
+                avatar_id = None
+                if avatar_type == 'avatar' and video_payload.get('avatar_id'):
+                    avatar_id = video_payload.get('avatar_id')
+                elif avatar_type == 'talking_photo' and video_payload.get('talking_photo_id'):
+                    avatar_id = video_payload.get('talking_photo_id')
+                
+                # Get voice settings
+                voice_id = video_payload.get('voice_id', '')
+                input_text = video_payload.get('input_text', '')
+                
+                # Get speed (0.5 to 1.5, default 1)
+                speed_value = "1"
+                if video_payload.get('speed'):
+                    speed_float = float(video_payload.get('speed'))
+                    speed_float = max(0.5, min(1.5, speed_float))
+                    speed_value = str(speed_float)
+                
+                # Build character object
+                character_obj = {
+                    "type": avatar_type,
+                    "scale": 1,
+                    "avatar_style": "normal",
+                    "talking_style": "stable"
+                }
+                
+                # Add avatar_id to character if available
+                if avatar_id:
+                    if avatar_type == 'avatar':
+                        character_obj["avatar_id"] = avatar_id
+                    elif avatar_type == 'talking_photo':
+                        character_obj["talking_photo_id"] = avatar_id
+                
+                # Build voice object - input_text should be directly in voice object, not nested
+                voice_obj = {
+                    "type": "text",
+                    "speed": speed_value,
+                    "pitch": "0",
+                    "duration": "1"
+                }
+                
+                # Add voice_id if provided
+                if voice_id:
+                    voice_obj["voice_id"] = voice_id
+                
+                # Add input_text directly to voice object (required by API)
+                # Ensure input_text is a string
+                input_text_value = str(input_text) if input_text else ""
+                voice_obj["input_text"] = input_text_value
+                
+                # Get text display settings (for on-screen text)
+                text_type = video_payload.get('text_type', 'text')
+                text_content = video_payload.get('text_content', '')
+                line_height = video_payload.get('line_height', 1.0)
+                
+                # Validate line_height
+                try:
+                    line_height_float = float(line_height)
+                    if line_height_float <= 0.0:
+                        line_height_float = 1.0  # Default to 1.0 if invalid
+                except (ValueError, TypeError):
+                    line_height_float = 1.0  # Default to 1.0 if invalid
+                
+                # Build text object for on-screen display
+                text_obj = {
+                    "type": text_type if text_type == "text" else "text",  # Ensure it's "text"
+                    "text": text_content,
+                    "line_height": line_height_float
+                }
+                
+                # Build video_inputs array
+                video_input = {
+                    "character": character_obj,
+                    "voice": voice_obj,
+                    "background": {
+                        "type": "color",
+                        "value": "#FFFFFF",
+                        "play_style": "freeze",
+                        "fit": "cover"
+                    },
+                    "text": text_obj
+                }
+                
+                # Build final payload
+                new_payload = {
+                    "caption": "false",
+                    "video_inputs": [video_input],
+                    "dimension": {
+                        "width": dimension_width,
+                        "height": dimension_height
+                    }
+                }
+                
+                # Add title if provided
+                if video_payload.get('title'):
+                    new_payload["title"] = video_payload.get('title')
+                
+                print(f"📤 Calling HeyGen video generation API (v2)...")
+            else:
+                # V4 API endpoint (default)
+                video_url = "https://api.heygen.com/v2/video/av4/generate"
+                headers = {
+                    "accept": "application/json",
+                    "content-type": "application/json",
+                    "x-api-key": api_key
+                }
+                
+                # Build payload for V4 API format
+                new_payload = {
+                    "video_orientation": video_payload.get('video_orientation', 'portrait'),
+                    "image_key": video_payload.get('image_key'),
+                    "video_title": video_payload.get('video_title', 'Avatar Video'),
+                    "script": video_payload.get('script', ''),
+                    "voice_id": video_payload.get('voice_id')
+                }
+                
+                # Add custom_motion_prompt if provided
+                custom_motion_prompt = video_payload.get('custom_motion_prompt', '').strip()
+                if custom_motion_prompt:
+                    new_payload["custom_motion_prompt"] = custom_motion_prompt
+                
+                print(f"📤 Calling HeyGen video generation API (v4)...")
+            
+            print(f"📋 Payload: {new_payload}")
+            print(f"📋 Payload JSON: {json.dumps(new_payload, indent=2)}")
             
             try:
-                response = requests.post(video_url, json=video_payload, headers=headers, timeout=60)
+                response = requests.post(video_url, json=new_payload, headers=headers, timeout=60)
                 
                 if response.status_code == 200:
                     response_data = response.json()
@@ -1186,10 +1390,9 @@ class AvatarGenerationView(APIView):
     
     def _poll_video_status(self, job_id, video_id, api_key):
         """Poll HeyGen API for video generation status"""
-        max_attempts = 120  # Check for up to 10 minutes (120 * 5 seconds)
         attempt = 0
         
-        while attempt < max_attempts:
+        while True:  # Poll indefinitely until video completes or fails
             try:
                 job = AvatarGenerationJob.objects.get(job_id=job_id)
                 
@@ -1317,7 +1520,7 @@ class AvatarGenerationView(APIView):
                         job.status = "processing"
                         job.progress = min(50 + (attempt * 1), 95)
                         job.save()
-                        print(f"⏳ Video still processing... (attempt {attempt + 1}/{max_attempts})")
+                        print(f"⏳ Video still processing... (attempt {attempt + 1})")
                 
                 attempt += 1
                 time.sleep(5)  # Wait 5 seconds before next check
@@ -1330,20 +1533,8 @@ class AvatarGenerationView(APIView):
                 import traceback
                 print(traceback.format_exc())
                 attempt += 1
-                if attempt >= max_attempts:
-                    break
+                # Continue polling even on error - don't break the loop
                 time.sleep(5)
-        
-        # Timeout - mark as error
-        try:
-            job = AvatarGenerationJob.objects.get(job_id=job_id)
-            job.status = "error"
-            job.error_message = "Video generation timed out after 10 minutes"
-            job.completed_at = timezone.now()
-            job.save()
-            print(f"⏱️ Job {job_id} timed out")
-        except AvatarGenerationJob.DoesNotExist:
-            pass
 
 
 class AvatarStatusView(APIView):
@@ -2486,6 +2677,186 @@ class AvatarImageView(APIView):
             )
 
 
+class AvatarImageFromHeyGenView(APIView):
+    """Get avatar image URLs directly from HeyGen API (without requiring database entry)"""
+    
+    def get(self, request, avatar_id):
+        """Fetch avatar image URLs directly from HeyGen API"""
+        try:
+            user = get_current_user(request)
+            if not user:
+                return Response(
+                    ResponseInfo.error("Authentication required"),
+                    status=status.HTTP_401_UNAUTHORIZED
+                )
+            
+            # Get HeyGen API key
+            api_key = os.getenv('HEYGEN_API_KEY')
+            if not api_key:
+                return Response(
+                    ResponseInfo.error("HeyGen API key not configured"),
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+            
+            # Try to fetch from avatar_group endpoint first (for avatar_group IDs)
+            # Then try generation endpoint (for generation IDs)
+            status_urls = [
+                f"https://api.heygen.com/v2/avatar_group.list",
+                f"https://api.heygen.com/v2/photo_avatar/generation/{avatar_id}"
+            ]
+            
+            headers = {
+                'accept': 'application/json',
+                'x-api-key': api_key
+            }
+            
+            # First try to get from avatar_group list
+            try:
+                list_response = requests.get(status_urls[0], headers=headers, params={"include_public": "false"}, timeout=30)
+                if list_response.status_code == 200:
+                    list_data = list_response.json()
+                    print(f"📥 Avatar group list response: {list_data}")
+                    
+                    # Find the avatar with matching ID
+                    avatar_list = []
+                    if isinstance(list_data, dict):
+                        if 'data' in list_data:
+                            data = list_data['data']
+                            if isinstance(data, dict):
+                                avatar_list = data.get('avatar_group_list', data.get('avatars', data.get('list', [])))
+                            elif isinstance(data, list):
+                                avatar_list = data
+                        elif 'avatar_group_list' in list_data:
+                            avatar_list = list_data['avatar_group_list']
+                        elif 'avatars' in list_data:
+                            avatar_list = list_data['avatars']
+                        elif 'list' in list_data:
+                            avatar_list = list_data['list']
+                    elif isinstance(list_data, list):
+                        avatar_list = list_data
+                    
+                    # Find matching avatar
+                    for avatar in avatar_list:
+                        avatar_dict = avatar if isinstance(avatar, dict) else avatar.__dict__
+                        # Based on actual HeyGen API response: id field contains the avatar ID
+                        current_avatar_id = avatar_dict.get('id') or avatar_dict.get('avatar_id') or avatar_dict.get('avatar_group_id')
+                        
+                        if current_avatar_id == avatar_id:
+                            # preview_image is the primary field for the avatar image URL in HeyGen response
+                            avatar_url = (
+                                avatar_dict.get('preview_image') or 
+                                avatar_dict.get('avatar_url') or 
+                                avatar_dict.get('url') or 
+                                avatar_dict.get('image_url') or
+                                avatar_dict.get('thumbnail_url') or
+                                avatar_dict.get('preview_url') or
+                                avatar_dict.get('image')
+                            )
+                            
+                            print(f"✅ Found avatar {avatar_id} in list, preview_image: {avatar_url[:100] if avatar_url else 'None'}...")
+                            
+                            if avatar_url:
+                                return Response(
+                                    ResponseInfo.success({
+                                        "generation_id": avatar_id,
+                                        "image_url_list": [avatar_url],
+                                        "primary_url": avatar_url,
+                                        "status": avatar_dict.get('train_status', avatar_dict.get('status', 'active'))
+                                    }, "Avatar image retrieved successfully"),
+                                    status=status.HTTP_200_OK
+                                )
+                            else:
+                                # Avatar found but no URL - might still be processing
+                                print(f"⚠️ Avatar {avatar_id} found but no preview_image available. Available keys: {list(avatar_dict.keys())}")
+                                return Response(
+                                    ResponseInfo.error("Avatar image URL not available. The avatar may still be processing."),
+                                    status=status.HTTP_404_NOT_FOUND
+                                )
+                    
+                    print(f"⚠️ Avatar {avatar_id} not found in avatar_group list")
+            except Exception as e:
+                print(f"⚠️ Could not fetch from avatar_group list: {str(e)}")
+                import traceback
+                print(traceback.format_exc())
+            
+            # If not found in list, try generation endpoint (only for generation IDs, not avatar_group IDs)
+            # Note: avatar_group IDs won't work with the generation endpoint
+            try:
+                status_response = requests.get(status_urls[1], headers=headers, timeout=30)
+                
+                if status_response.status_code == 200:
+                    status_data = status_response.json()
+                    print(f"📊 Fetched avatar images directly from HeyGen generation endpoint: {status_data}")
+                    
+                    # Extract image URLs from response
+                    image_url_list = status_data.get('data', {}).get('image_url_list') or []
+                    avatar_url = (
+                        status_data.get('data', {}).get('url') or 
+                        status_data.get('data', {}).get('avatar_url') or 
+                        status_data.get('url') or
+                        status_data.get('data', {}).get('image_url')
+                    )
+                    
+                    # If we have a list, use it; otherwise use single URL
+                    image_urls = image_url_list if image_url_list else ([avatar_url] if avatar_url else [])
+                    
+                    if not image_urls:
+                        return Response(
+                            ResponseInfo.error("Avatar image URL not available. The avatar may still be processing."),
+                            status=status.HTTP_404_NOT_FOUND
+                        )
+                    
+                    response_data = {
+                        "generation_id": avatar_id,
+                        "image_url_list": image_urls,
+                        "primary_url": avatar_url or (image_urls[0] if image_urls else None),
+                        "status": status_data.get('data', {}).get('status') or status_data.get('status')
+                    }
+                    
+                    return Response(
+                        ResponseInfo.success(response_data, "Avatar images retrieved successfully"),
+                        status=status.HTTP_200_OK
+                    )
+                elif status_response.status_code == 404:
+                    # 404 means this is likely an avatar_group_id, not a generation_id
+                    error_msg = f"Avatar not found. This might be an avatar_group ID, not a generation ID. Please check the avatar list."
+                    print(f"❌ {error_msg}")
+                    return Response(
+                        ResponseInfo.error(error_msg),
+                        status=status.HTTP_404_NOT_FOUND
+                    )
+                else:
+                    error_msg = f"Failed to fetch avatar images: {status_response.status_code} - {status_response.text[:500]}"
+                    print(f"❌ {error_msg}")
+                    return Response(
+                        ResponseInfo.error(error_msg),
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                    )
+            except requests.exceptions.ConnectionError as e:
+                error_msg = f"Connection error: Failed to connect to HeyGen API."
+                print(f"❌ {error_msg}")
+                return Response(
+                    ResponseInfo.error(error_msg),
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+            except requests.exceptions.RequestException as e:
+                error_msg = f"Request error: {str(e)}"
+                print(f"❌ {error_msg}")
+                return Response(
+                    ResponseInfo.error(error_msg),
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+                
+        except Exception as e:
+            print(f"❌ Error fetching avatar images from HeyGen: {str(e)}")
+            import traceback
+            print(traceback.format_exc())
+            return Response(
+                ResponseInfo.error(f"Error fetching avatar images: {str(e)}"),
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
 class AvatarVoicesView(APIView):
     """Get list of available voices from HeyGen API"""
     
@@ -2532,6 +2903,589 @@ class AvatarVoicesView(APIView):
             print(traceback.format_exc())
             return Response(
                 ResponseInfo.error(f"Error fetching voices: {str(e)}"),
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class AvatarListFromHeyGenView(APIView):
+    """Get list of avatars from HeyGen dashboard"""
+    
+    def get(self, request):
+        """Fetch avatars from HeyGen API"""
+        try:
+            user = get_current_user(request)
+            if not user:
+                return Response(
+                    ResponseInfo.error("Authentication required"),
+                    status=status.HTTP_401_UNAUTHORIZED
+                )
+            
+            # Get HeyGen API key from environment
+            heygen_api_key = os.getenv('HEYGEN_API_KEY')
+            if not heygen_api_key:
+                return Response(
+                    ResponseInfo.error("HeyGen API key not configured"),
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+            
+            # Call HeyGen API to get avatar list
+            url = "https://api.heygen.com/v2/avatars"
+            headers = {
+                "accept": "application/json",
+                "x-api-key": heygen_api_key
+            }
+            
+            print(f"🔄 Fetching avatars from HeyGen API...")
+            print(f"🔗 URL: {url}")
+            print(f"🔑 API Key: {'Present' if heygen_api_key else 'Missing'}")
+            
+            response = requests.get(url, headers=headers, timeout=30)
+            
+            print(f"📡 Response Status Code: {response.status_code}")
+            
+            if response.status_code == 200:
+                try:
+                    avatars_data = response.json()
+                    print(f"📥 HeyGen API Response type: {type(avatars_data)}")
+                    if isinstance(avatars_data, dict):
+                        print(f"📥 HeyGen API Response keys: {list(avatars_data.keys())}")
+                        # Print first few items for debugging
+                        for key in list(avatars_data.keys())[:3]:
+                            value = avatars_data[key]
+                            if isinstance(value, list) and len(value) > 0:
+                                print(f"📥 Sample item from '{key}': {str(value[0])[:200]}")
+                    elif isinstance(avatars_data, list):
+                        print(f"📥 HeyGen API Response is a list with {len(avatars_data)} items")
+                        if len(avatars_data) > 0:
+                            print(f"📥 Sample item: {str(avatars_data[0])[:200]}")
+                except Exception as json_error:
+                    print(f"❌ Error parsing JSON response: {str(json_error)}")
+                    print(f"📥 Raw response text (first 500 chars): {response.text[:500]}")
+                    return Response(
+                        ResponseInfo.error(f"Invalid JSON response from HeyGen API: {str(json_error)}"),
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                    )
+                
+                # Handle different possible response structures
+                # Based on actual HeyGen API, response structure is:
+                # { "error": null, "data": { "avatars": [...] } }
+                avatar_list = []
+                if isinstance(avatars_data, dict):
+                    # Try different possible keys
+                    if 'data' in avatars_data:
+                        data = avatars_data['data']
+                        if isinstance(data, dict):
+                            # Check for 'avatars' key first (actual API structure)
+                            avatar_list = data.get('avatars', data.get('avatar_group_list', data.get('list', [])))
+                        elif isinstance(data, list):
+                            avatar_list = data
+                    elif 'avatar_group_list' in avatars_data:
+                        avatar_list = avatars_data['avatar_group_list']
+                    elif 'avatars' in avatars_data:
+                        avatar_list = avatars_data['avatars']
+                    elif 'list' in avatars_data:
+                        avatar_list = avatars_data['list']
+                elif isinstance(avatars_data, list):
+                    # Direct list response
+                    avatar_list = avatars_data
+                
+                print(f"✅ Successfully fetched {len(avatar_list)} avatars from HeyGen")
+                
+                if len(avatar_list) == 0:
+                    print(f"⚠️ Warning: No avatars found in response. Response structure might have changed.")
+                    print(f"📥 Full response structure: {str(avatars_data)[:500]}")
+                
+                # Regex pattern to match UUID format (32 hex characters like "36b31b6e7c4d489c9dae7d1b3b634dca")
+                uuid_pattern = re.compile(r'^[0-9a-f]{32}$', re.IGNORECASE)
+                
+                # Format the response to include relevant avatar information
+                formatted_avatars = []
+                saved_count = 0
+                skipped_count = 0
+                
+                for avatar in avatar_list:
+                    # Handle both dict and object-like structures
+                    if isinstance(avatar, dict):
+                        # Based on actual HeyGen API response structure:
+                        # - avatar_id: avatar ID (not "id")
+                        # - avatar_name: avatar name (not "name")
+                        # - preview_image_url: the image URL
+                        # - preview_video_url: the video URL (for video avatars)
+                        # - type: avatar type (can be null)
+                        avatar_id = avatar.get("avatar_id", avatar.get("id", ""))
+                        
+                        # Filter: Only include avatars with UUID format (32 hex characters)
+                        if not avatar_id:
+                            print(f"⏭️ Skipping avatar with no ID. Available keys: {list(avatar.keys())}")
+                            skipped_count += 1
+                            continue
+                        if not uuid_pattern.match(avatar_id):
+                            print(f"⏭️ Skipping avatar with non-UUID ID: {avatar_id} (length: {len(avatar_id)})")
+                            skipped_count += 1
+                            continue
+                        
+                        avatar_name = avatar.get("avatar_name", avatar.get("name", ""))
+                        
+                        # Check for video URL first (for video avatars), then fall back to image URLs
+                        # Based on actual API: preview_video_url is the field for video avatars
+                        # Also check for type field that might indicate video avatar
+                        avatar_type = avatar.get("type", avatar.get("avatar_type", ""))
+                        is_video_avatar = avatar_type and ("video" in str(avatar_type).lower() or "talking" in str(avatar_type).lower())
+                        
+                        # Check preview_video_url first (actual API field name)
+                        video_url = (
+                            avatar.get("preview_video_url") or  # Primary field from actual API
+                            avatar.get("video_url") or 
+                            avatar.get("video_preview_url") or
+                            avatar.get("video_preview") or
+                            avatar.get("video") or
+                            avatar.get("preview_video") or
+                            ""
+                        )
+                        
+                        # Log all available keys for debugging video avatars
+                        if is_video_avatar or not video_url:
+                            all_keys = list(avatar.keys())
+                            video_related_keys = [k for k in all_keys if "video" in k.lower() or "preview" in k.lower()]
+                            if video_related_keys:
+                                print(f"🔍 Avatar {avatar_id} - Video-related keys found: {video_related_keys}")
+                        
+                        # If video URL exists, use it; otherwise use image/preview URLs
+                        if video_url:
+                            avatar_url = video_url
+                            print(f"🎥 Avatar {avatar_id} is a video avatar, using video URL: {video_url[:100]}...")
+                        elif is_video_avatar:
+                            # If marked as video avatar but no video URL found, log for debugging
+                            print(f"⚠️ Avatar {avatar_id} is marked as video type but no video URL found. Available keys: {list(avatar.keys())}")
+                            # Still try to get image URL as fallback
+                            avatar_url = (
+                                avatar.get("preview_image_url") or
+                                avatar.get("preview_image") or 
+                                avatar.get("avatar_url") or 
+                                avatar.get("url") or 
+                                avatar.get("image_url") or
+                                avatar.get("thumbnail_url") or
+                                avatar.get("preview_url") or
+                                avatar.get("image") or
+                                avatar.get("avatar_image_url") or
+                                ""
+                            )
+                        else:
+                            # preview_image_url is the primary field for the avatar image URL (actual API field name)
+                            avatar_url = (
+                                avatar.get("preview_image_url") or  # Primary field from actual API
+                                avatar.get("preview_image") or 
+                                avatar.get("avatar_url") or 
+                                avatar.get("url") or 
+                                avatar.get("image_url") or
+                                avatar.get("thumbnail_url") or
+                                avatar.get("preview_url") or
+                                avatar.get("image") or
+                                avatar.get("avatar_image_url") or
+                                ""
+                            )
+                        
+                        # Convert created_at from timestamp to ISO string if it's a number
+                        created_at = avatar.get("created_at", avatar.get("created", ""))
+                        if isinstance(created_at, (int, float)):
+                            from datetime import datetime
+                            created_at = datetime.fromtimestamp(created_at).isoformat()
+                        
+                        formatted_avatar = {
+                            "avatar_id": avatar_id,
+                            "avatar_name": avatar_name,
+                            "avatar_url": avatar_url,
+                            "created_at": created_at,
+                            "updated_at": avatar.get("updated_at", avatar.get("updated", "")),
+                            "status": avatar.get("train_status", avatar.get("status", "active")),
+                        }
+                        # Log if avatar_url is missing for debugging
+                        if not avatar_url:
+                            print(f"⚠️ Avatar {avatar_id} has no avatar_url. Available keys: {list(avatar.keys())}")
+                        else:
+                            media_type = "video" if video_url else "image"
+                            print(f"✅ Avatar {avatar_id} ({avatar_name}) - {media_type} URL: {avatar_url[:100]}...")
+                    else:
+                        # If it's an object with attributes
+                        avatar_id = getattr(avatar, "id", getattr(avatar, "avatar_id", ""))
+                        
+                        # Filter: Only include avatars with UUID format (32 hex characters)
+                        if not avatar_id:
+                            print(f"⏭️ Skipping avatar with no ID")
+                            skipped_count += 1
+                            continue
+                        if not uuid_pattern.match(avatar_id):
+                            print(f"⏭️ Skipping avatar with non-UUID ID: {avatar_id} (length: {len(avatar_id)})")
+                            skipped_count += 1
+                            continue
+                        
+                        avatar_name = getattr(avatar, "name", getattr(avatar, "avatar_name", ""))
+                        
+                        # Check for video URL first (for video avatars), then fall back to image URLs
+                        # Also check for type field that might indicate video avatar
+                        avatar_type = getattr(avatar, "type", getattr(avatar, "avatar_type", ""))
+                        is_video_avatar = avatar_type and ("video" in str(avatar_type).lower() or "talking" in str(avatar_type).lower())
+                        
+                        video_url = (
+                            getattr(avatar, "video_url", None) or 
+                            getattr(avatar, "preview_video_url", None) or 
+                            getattr(avatar, "video_preview", None) or
+                            getattr(avatar, "video", None) or
+                            getattr(avatar, "video_preview_url", None) or
+                            getattr(avatar, "preview_video", None) or
+                            ""
+                        )
+                        
+                        # If video URL exists, use it; otherwise use image/preview URLs
+                        if video_url:
+                            avatar_url = video_url
+                            print(f"🎥 Avatar {avatar_id} is a video avatar, using video URL: {video_url[:100] if video_url else ''}...")
+                        elif is_video_avatar:
+                            # If marked as video avatar but no video URL found, log for debugging
+                            print(f"⚠️ Avatar {avatar_id} is marked as video type but no video URL found")
+                            # Still try to get image URL as fallback
+                            avatar_url = (
+                                getattr(avatar, "preview_image", None) or 
+                                getattr(avatar, "avatar_url", None) or 
+                                getattr(avatar, "url", None) or 
+                                getattr(avatar, "image_url", None) or
+                                getattr(avatar, "thumbnail_url", None) or
+                                getattr(avatar, "preview_url", None) or
+                                getattr(avatar, "image", None) or
+                                ""
+                            )
+                        else:
+                            avatar_url = (
+                                getattr(avatar, "preview_image_url", None) or
+                                getattr(avatar, "preview_image", None) or 
+                                getattr(avatar, "avatar_url", None) or 
+                                getattr(avatar, "url", None) or 
+                                getattr(avatar, "image_url", None) or
+                                getattr(avatar, "thumbnail_url", None) or
+                                getattr(avatar, "preview_url", None) or
+                                getattr(avatar, "image", None) or
+                                ""
+                            )
+                        
+                        created_at = getattr(avatar, "created_at", getattr(avatar, "created", ""))
+                        if isinstance(created_at, (int, float)):
+                            from datetime import datetime
+                            created_at = datetime.fromtimestamp(created_at).isoformat()
+                        
+                        formatted_avatar = {
+                            "avatar_id": avatar_id,
+                            "avatar_name": avatar_name,
+                            "avatar_url": avatar_url or "",
+                            "created_at": created_at,
+                            "updated_at": getattr(avatar, "updated_at", getattr(avatar, "updated", "")),
+                            "status": getattr(avatar, "train_status", getattr(avatar, "status", "active")),
+                        }
+                        
+                        # Log if avatar_url is missing for debugging
+                        if not avatar_url:
+                            print(f"⚠️ Avatar {avatar_id} has no avatar_url. Available attributes: {dir(avatar)}")
+                        else:
+                            media_type = "video" if video_url else "image"
+                            print(f"✅ Avatar {avatar_id} ({avatar_name}) - {media_type} URL: {avatar_url[:100]}...")
+                    formatted_avatars.append(formatted_avatar)
+                
+                # Save avatars to database if they don't already exist
+                from datetime import datetime
+                for formatted_avatar in formatted_avatars:
+                    avatar_id = formatted_avatar.get("avatar_id", "")
+                    avatar_name = formatted_avatar.get("avatar_name", "")
+                    avatar_url = formatted_avatar.get("avatar_url", "")
+                    
+                    if not avatar_id:
+                        print(f"⚠️ Skipping avatar with no avatar_id")
+                        skipped_count += 1
+                        continue
+                    
+                    # Check if avatar already exists in database (by avatar_id or generation_id)
+                    # Only consider it existing if it's completed and has an avatar_url
+                    existing_job = AvatarGenerationJob.objects.filter(
+                        user=user
+                    ).filter(
+                        models.Q(avatar_id=avatar_id) | models.Q(generation_id=avatar_id)
+                    ).filter(
+                        status='completed',
+                        avatar_url__isnull=False
+                    ).exclude(
+                        avatar_url=''
+                    ).first()
+                    
+                    if existing_job:
+                        # Update existing job if needed
+                        # Always update if:
+                        # 1. avatar_url changed, OR
+                        # 2. We have a video URL and the existing one is not a video (prioritize video URLs), OR
+                        # 3. provider is not 'heygen' (avatars from HeyGen dashboard should have provider='heygen')
+                        should_update = False
+                        update_reason = ""
+                        
+                        if avatar_url and existing_job.avatar_url != avatar_url:
+                            should_update = True
+                            update_reason = "URL changed"
+                        elif video_url and existing_job.avatar_url:
+                            # Check if existing URL is a video URL
+                            existing_is_video = any(ext in existing_job.avatar_url.lower() for ext in ['.mp4', '.webm', '.mov', 'video'])
+                            new_is_video = any(ext in avatar_url.lower() for ext in ['.mp4', '.webm', '.mov', 'video'])
+                            if new_is_video and not existing_is_video:
+                                should_update = True
+                                update_reason = "Updating to video URL"
+                        
+                        # Ensure provider is 'heygen' for avatars fetched from HeyGen dashboard
+                        if existing_job.provider != 'heygen':
+                            should_update = True
+                            if update_reason:
+                                update_reason += ", provider updated to 'heygen'"
+                            else:
+                                update_reason = "Provider updated to 'heygen'"
+                        
+                        if should_update:
+                            existing_job.avatar_url = avatar_url
+                            if existing_job.provider != 'heygen':
+                                existing_job.provider = 'heygen'
+                            existing_job.save()
+                            print(f"🔄 Updated avatar {avatar_id} in database ({update_reason}): {avatar_url[:100]}...")
+                        else:
+                            print(f"⏭️ Avatar {avatar_id} already exists in database, skipping")
+                        skipped_count += 1
+                    else:
+                        # Create new job record for this avatar
+                        try:
+                            # Parse created_at if it's a string
+                            created_at_dt = None
+                            if formatted_avatar.get("created_at"):
+                                created_at_str = formatted_avatar.get("created_at")
+                                try:
+                                    if isinstance(created_at_str, str):
+                                        # Try parsing ISO format
+                                        created_at_dt = datetime.fromisoformat(created_at_str.replace('Z', '+00:00'))
+                                    elif isinstance(created_at_str, (int, float)):
+                                        created_at_dt = datetime.fromtimestamp(created_at_str)
+                                except (ValueError, TypeError) as e:
+                                    print(f"⚠️ Could not parse created_at for avatar {avatar_id}: {e}")
+                                    created_at_dt = timezone.now()
+                            else:
+                                created_at_dt = timezone.now()
+                            
+                            new_job = AvatarGenerationJob.objects.create(
+                                user=user,
+                                prompt=avatar_name or "Avatar from HeyGen dashboard",  # Use avatar name as prompt
+                                name=avatar_name,
+                                avatar_id=avatar_id,
+                                generation_id=avatar_id,  # Use avatar_id as generation_id for consistency
+                                avatar_url=avatar_url,
+                                status="completed",
+                                progress=100,
+                                completed_at=created_at_dt if created_at_dt else timezone.now(),
+                                provider="heygen"
+                            )
+                            saved_count += 1
+                            print(f"💾 Saved avatar {avatar_id} ({avatar_name}) to database")
+                        except Exception as save_error:
+                            print(f"❌ Error saving avatar {avatar_id} to database: {str(save_error)}")
+                            import traceback
+                            print(traceback.format_exc())
+                            skipped_count += 1
+                
+                print(f"📊 Avatar sync summary: {saved_count} saved, {skipped_count} skipped (already exist)")
+                
+                return Response(
+                    ResponseInfo.success({
+                        "avatars": formatted_avatars,
+                        "total_count": len(formatted_avatars),
+                        "saved_count": saved_count,
+                        "skipped_count": skipped_count
+                    }, f"Avatars fetched successfully. {saved_count} new avatar(s) saved to database."),
+                    status=status.HTTP_200_OK
+                )
+            else:
+                error_msg = f"HeyGen API returned status {response.status_code}"
+                print(f"❌ {error_msg}: {response.text}")
+                return Response(
+                    ResponseInfo.error(error_msg),
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+                
+        except Exception as e:
+            print(f"❌ Error fetching avatars from HeyGen: {str(e)}")
+            import traceback
+            print(traceback.format_exc())
+            return Response(
+                ResponseInfo.error(f"Error fetching avatars: {str(e)}"),
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class AssetListFromHeyGenView(APIView):
+    """Get list of assets (images) from HeyGen media"""
+    
+    def get(self, request):
+        """Fetch assets from HeyGen API"""
+        try:
+            user = get_current_user(request)
+            if not user:
+                return Response(
+                    ResponseInfo.error("Authentication required"),
+                    status=status.HTTP_401_UNAUTHORIZED
+                )
+            
+            # Get HeyGen API key from environment
+            heygen_api_key = os.getenv('HEYGEN_API_KEY')
+            if not heygen_api_key:
+                return Response(
+                    ResponseInfo.error("HeyGen API key not configured"),
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+            
+            # Call HeyGen API to get asset list
+            url = "https://api.heygen.com/v1/asset/list"
+            headers = {
+                "accept": "application/json",
+                "x-api-key": heygen_api_key
+            }
+            
+            print(f"🔄 Fetching assets from HeyGen API...")
+            response = requests.get(url, headers=headers)
+            
+            if response.status_code == 200:
+                assets_data = response.json()
+                print(f"📥 HeyGen Asset API Response type: {type(assets_data)}")
+                if isinstance(assets_data, dict):
+                    print(f"📥 HeyGen Asset API Response keys: {list(assets_data.keys())}")
+                
+                # Handle different possible response structures
+                asset_list = []
+                if isinstance(assets_data, dict):
+                    # Try different possible keys
+                    if 'data' in assets_data:
+                        data = assets_data['data']
+                        if isinstance(data, dict):
+                            asset_list = data.get('assets', data.get('list', data.get('items', [])))
+                        elif isinstance(data, list):
+                            asset_list = data
+                    elif 'assets' in assets_data:
+                        asset_list = assets_data['assets']
+                    elif 'list' in assets_data:
+                        asset_list = assets_data['list']
+                    elif 'items' in assets_data:
+                        asset_list = assets_data['items']
+                elif isinstance(assets_data, list):
+                    # Direct list response
+                    asset_list = assets_data
+                
+                print(f"✅ Successfully fetched {len(asset_list)} assets from HeyGen")
+                
+                # Format the response to include relevant asset information
+                formatted_assets = []
+                for asset in asset_list:
+                    # Handle both dict and object-like structures
+                    if isinstance(asset, dict):
+                        # Extract asset key and file type
+                        asset_key = asset.get("key", asset.get("image_key", asset.get("asset_key", "")))
+                        asset_id = asset.get("id", asset.get("asset_id", ""))
+                        asset_name = asset.get("name", asset.get("asset_name", asset.get("title", "")))
+                        file_type = asset.get("file_type", asset.get("type", asset.get("asset_type", "image")))
+                        
+                        # Get URL (works for both images and videos)
+                        media_url = (
+                            asset.get("url") or 
+                            asset.get("image_url") or 
+                            asset.get("video_url") or
+                            asset.get("preview_url") or 
+                            asset.get("thumbnail_url") or 
+                            asset.get("preview_image") or
+                            asset.get("image") or
+                            ""
+                        )
+                        
+                        # Construct asset_key if not provided
+                        # Format: "image/{id}/original" for images, "video/{id}/original" for videos
+                        if not asset_key and asset_id:
+                            if file_type == "video":
+                                asset_key = f"video/{asset_id}/original"
+                            else:
+                                asset_key = f"image/{asset_id}/original"
+                        
+                        # Convert created_at from timestamp to ISO string if it's a number
+                        created_at = asset.get("created_at", asset.get("created", asset.get("created_ts", "")))
+                        if isinstance(created_at, (int, float)):
+                            from datetime import datetime
+                            created_at = datetime.fromtimestamp(created_at).isoformat()
+                        
+                        formatted_asset = {
+                            "asset_key": asset_key or "",
+                            "asset_id": asset_id,
+                            "asset_name": asset_name or f"Asset {asset_id}" if asset_id else "Unnamed Asset",
+                            "image_url": media_url or "",
+                            "video_url": media_url if file_type == "video" else "",
+                            "created_at": created_at,
+                            "type": file_type,
+                        }
+                    else:
+                        # Handle object-like structure
+                        asset_key = getattr(asset, "key", getattr(asset, "image_key", getattr(asset, "asset_key", "")))
+                        asset_id = getattr(asset, "id", getattr(asset, "asset_id", ""))
+                        asset_name = getattr(asset, "name", getattr(asset, "asset_name", getattr(asset, "title", "")))
+                        file_type = getattr(asset, "file_type", getattr(asset, "type", getattr(asset, "asset_type", "image")))
+                        
+                        media_url = (
+                            getattr(asset, "url", None) or 
+                            getattr(asset, "image_url", None) or 
+                            getattr(asset, "video_url", None) or
+                            getattr(asset, "preview_url", None) or 
+                            getattr(asset, "thumbnail_url", None) or 
+                            getattr(asset, "preview_image", None) or
+                            getattr(asset, "image", None) or
+                            ""
+                        )
+                        
+                        # Construct asset_key if not provided
+                        if not asset_key and asset_id:
+                            if file_type == "video":
+                                asset_key = f"video/{asset_id}/original"
+                            else:
+                                asset_key = f"image/{asset_id}/original"
+                        
+                        created_at = getattr(asset, "created_at", getattr(asset, "created", getattr(asset, "created_ts", "")))
+                        if isinstance(created_at, (int, float)):
+                            from datetime import datetime
+                            created_at = datetime.fromtimestamp(created_at).isoformat()
+                        
+                        formatted_asset = {
+                            "asset_key": asset_key or "",
+                            "asset_id": asset_id,
+                            "asset_name": asset_name or f"Asset {asset_id}" if asset_id else "Unnamed Asset",
+                            "image_url": media_url or "",
+                            "video_url": media_url if file_type == "video" else "",
+                            "created_at": created_at,
+                            "type": file_type,
+                        }
+                    formatted_assets.append(formatted_asset)
+                
+                return Response(
+                    ResponseInfo.success({
+                        "assets": formatted_assets,
+                        "total_count": len(formatted_assets)
+                    }, "Assets fetched successfully"),
+                    status=status.HTTP_200_OK
+                )
+            else:
+                error_msg = f"HeyGen API returned status {response.status_code}"
+                print(f"❌ {error_msg}: {response.text}")
+                return Response(
+                    ResponseInfo.error(error_msg),
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+                
+        except Exception as e:
+            print(f"❌ Error fetching assets from HeyGen: {str(e)}")
+            import traceback
+            print(traceback.format_exc())
+            return Response(
+                ResponseInfo.error(f"Error fetching assets: {str(e)}"),
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 

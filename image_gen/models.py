@@ -96,6 +96,7 @@ class AvatarGenerationJob(models.Model):
     avatar_url = models.URLField(max_length=2000, null=True, blank=True)  # URL to the generated avatar
     avatar_id = models.CharField(max_length=255, null=True, blank=True)  # HeyGen avatar ID
     image_key = models.CharField(max_length=500, null=True, blank=True)  # HeyGen image key from upload
+    thumbnail_url = models.URLField(max_length=2000, null=True, blank=True)  # Thumbnail URL for video avatars
     provider = models.CharField(max_length=100, default='heygen')
     error_message = models.TextField(null=True, blank=True)
     note = models.TextField(null=True, blank=True)

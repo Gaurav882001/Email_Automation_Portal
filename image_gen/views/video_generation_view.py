@@ -4,9 +4,9 @@ import time
 import threading
 import warnings
 import base64
-import tempfile
 import openai
 import csv
+import json
 from datetime import datetime
 from django.conf import settings
 from django.core.files.storage import default_storage
@@ -31,6 +31,41 @@ load_dotenv()
 
 # Disable SSL warnings
 warnings.filterwarnings('ignore', message='Unverified HTTPS request')
+
+
+def load_job_metadata(job):
+    """Parse job.note JSON safely."""
+    if not job.note:
+        return {}
+    try:
+        data = json.loads(job.note)
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        pass
+    return {}
+
+
+def save_job_metadata(job, metadata):
+    """Store metadata dict in job.note."""
+    try:
+        job.note = json.dumps(metadata)
+    except Exception:
+        # Fallback to plain string representation
+        job.note = str(metadata)
+
+
+def get_veo_file_metadata(job):
+    """Return dict containing stored Veo file references."""
+    metadata = load_job_metadata(job)
+    veo_meta = metadata.get('veo_metadata')
+    if isinstance(veo_meta, dict):
+        return veo_meta
+    # Backward compatibility: metadata might have been stored at top-level
+    legacy_keys = ('veo_file_uri', 'veo_file_name', 'veo_mime_type')
+    if all(key in metadata for key in legacy_keys):
+        return {key: metadata.get(key) for key in legacy_keys}
+    return {}
 
 
 def process_csv_feedback(csv_file):
@@ -585,6 +620,20 @@ def generate_video_with_veo(job_id, prompt, duration):
         # Download the generated video
         generated_video = operation.response.generated_videos[0]
         print(f"📹 Generated video object: {generated_video}")
+
+        # Capture Veo file metadata for future extensions
+        veo_file_name = getattr(getattr(generated_video, 'video', None), 'name', None)
+        veo_file_uri = getattr(getattr(generated_video, 'video', None), 'uri', None)
+        veo_mime_type = getattr(getattr(generated_video, 'video', None), 'mime_type', None)
+        veo_metadata = {
+            'veo_file_name': veo_file_name,
+            'veo_file_uri': veo_file_uri,
+            'veo_mime_type': veo_mime_type,
+        }
+        metadata = load_job_metadata(job)
+        metadata['veo_metadata'] = veo_metadata
+        save_job_metadata(job, metadata)
+        job.save(update_fields=['note'])
         
         # Create filename for the video
         video_filename = f"video_{job_id}_{int(time.time())}.mp4"
@@ -624,6 +673,165 @@ def generate_video_with_veo(job_id, prompt, duration):
         
     except Exception as e:
         print(f"❌ Error generating video for job {job_id}: {str(e)}")
+        import traceback
+        print(f"📋 Full traceback: {traceback.format_exc()}")
+        
+        # Update job with error
+        job = VideoGenerationJob.objects.get(job_id=job_id)
+        job.status = 'failed'
+        job.error_message = str(e)
+        job.completed_at = datetime.now()
+        job.save()
+
+
+def extend_video_with_veo(job_id, prompt, source_veo_metadata):
+    """Extend video duration by 7 seconds using Google Veo 3.1 API"""
+    try:
+        # Get API key from environment
+        gemini_api_key = os.getenv('NANO_BANANA_API_KEY')
+        if not gemini_api_key:
+            raise Exception("Google Gemini API key not configured. Please add NANO_BANANA_API_KEY to your .env file")
+        
+        print(f"🎬 Starting video extension for job {job_id}")
+        print(f"📝 Prompt: {prompt}")
+        print(f"🔑 API Key: {'Present' if gemini_api_key else 'Missing'}")
+        
+        # Initialize the Google GenAI client
+        client = genai.Client(api_key=gemini_api_key)
+        
+        # Update job status to processing
+        job = VideoGenerationJob.objects.get(job_id=job_id)
+        job.status = 'processing'
+        job.started_at = datetime.now()
+        job.progress = 10
+        job.save()
+        
+        if not source_veo_metadata:
+            raise Exception("No Veo metadata found for source video. Please regenerate the video before extending.")
+        
+        veo_file_name = source_veo_metadata.get('veo_file_name')
+        veo_file_uri = source_veo_metadata.get('veo_file_uri')
+        veo_mime_type = source_veo_metadata.get('veo_mime_type')
+        print(f"📁 Source Veo metadata: name={veo_file_name}, uri={veo_file_uri}")
+        
+        if not veo_file_uri and veo_file_name:
+            try:
+                clean_file = client.files.get(name=veo_file_name)
+                veo_file_uri = getattr(clean_file, 'uri', None)
+                veo_mime_type = getattr(clean_file, 'mime_type', veo_mime_type)
+                print(f"🔁 Retrieved Veo file via files.get(): uri={veo_file_uri}")
+            except Exception as fetch_error:
+                print(f"⚠️ Could not retrieve Veo file {veo_file_name}: {str(fetch_error)}")
+                raise Exception("Unable to retrieve Veo-generated source video for extension") from fetch_error
+        
+        if not veo_file_uri:
+            raise Exception("Veo file reference missing or invalid. Please regenerate the original video before extending.")
+        
+        video_file_ref = types.Video(uri=veo_file_uri)
+        video_source = types.GenerateVideosSource(
+            prompt=prompt,
+            video=video_file_ref,
+        )
+        
+        # Update progress
+        job.progress = 30
+        job.save()
+        
+        print(f"🎬 Calling Veo 3.1 API for video extension...")
+        print(f"   - Prompt: {prompt[:100]}...")
+        print(f"   - Source video URI: {veo_file_uri}")
+        
+        operation = client.models.generate_videos(
+            model="veo-3.1-generate-preview",
+            source=video_source,
+        )
+        
+        # Update progress
+        job.progress = 40
+        job.save()
+        
+        # Poll the operation status until the video is ready
+        print(f"⏳ Waiting for video extension to complete...")
+        while not operation.done:
+            print(f"   - Still processing... (progress: {job.progress}%)")
+            time.sleep(10)
+            operation = client.operations.get(operation)
+            
+            # Update progress (gradual increase)
+            if job.progress < 80:
+                job.progress += 10
+                job.save()
+        
+        # Update progress to 90%
+        job.progress = 90
+        job.save()
+        
+        print(f"✅ Video extension completed, downloading...")
+        
+        # Check if operation has response and generated_videos
+        if not operation.response:
+            raise Exception("No response from video extension operation")
+        
+        if not hasattr(operation.response, 'generated_videos') or not operation.response.generated_videos:
+            print(f"⚠️ Response structure: {dir(operation.response)}")
+            print(f"⚠️ Response content: {operation.response}")
+            raise Exception("No generated videos in response")
+        
+        # Download the extended video
+        generated_video = operation.response.generated_videos[0]
+        print(f"📹 Extended video object: {generated_video}")
+
+        # Capture Veo metadata for the newly generated clip so it can be extended again
+        veo_file_name = getattr(getattr(generated_video, 'video', None), 'name', None)
+        veo_file_uri = getattr(getattr(generated_video, 'video', None), 'uri', None)
+        veo_mime_type = getattr(getattr(generated_video, 'video', None), 'mime_type', None)
+        veo_metadata = {
+            'veo_file_name': veo_file_name,
+            'veo_file_uri': veo_file_uri,
+            'veo_mime_type': veo_mime_type,
+        }
+        metadata = load_job_metadata(job)
+        metadata['veo_metadata'] = veo_metadata
+        save_job_metadata(job, metadata)
+        job.save(update_fields=['note'])
+        
+        # Create filename for the extended video
+        video_filename = f"video_extended_{job_id}_{int(time.time())}.mp4"
+        
+        # Download video content
+        if hasattr(generated_video, 'video'):
+            video_content = client.files.download(file=generated_video.video)
+        elif hasattr(generated_video, 'uri'):
+            video_content = client.files.download(name=generated_video.uri)
+        else:
+            print(f"⚠️ Video object structure: {dir(generated_video)}")
+            raise Exception(f"Cannot find video content in generated_video object")
+        
+        # Save video to media directory
+        video_path = f"generated_videos/{video_filename}"
+        full_path = os.path.join(settings.MEDIA_ROOT, video_path)
+        
+        # Ensure directory exists
+        os.makedirs(os.path.dirname(full_path), exist_ok=True)
+        
+        # Save video file
+        with open(full_path, 'wb') as f:
+            f.write(video_content)
+        
+        print(f"💾 Extended video saved: {video_path} (size: {len(video_content)} bytes)")
+        
+        # Update job with completion details
+        job.status = 'completed'
+        job.completed_at = datetime.now()
+        job.progress = 100
+        job.video_file_path = video_path
+        job.video_url = f"{settings.MEDIA_URL}{video_path}"
+        job.save()
+        
+        print(f"✅ Video extension completed successfully for job {job_id}")
+        
+    except Exception as e:
+        print(f"❌ Error extending video for job {job_id}: {str(e)}")
         import traceback
         print(f"📋 Full traceback: {traceback.format_exc()}")
         
@@ -1316,5 +1524,118 @@ class RefineVideoPromptView(APIView):
             print(f"📋 Full traceback: {traceback.format_exc()}")
             return Response(
                 ResponseInfo.error(f"Failed to refine video prompt: {str(e)}"),
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class VideoExtendView(APIView):
+    """API view for extending video duration using Google Veo 3.1"""
+    parser_classes = [MultiPartParser, FormParser]
+    
+    def post(self, request):
+        try:
+            print(f"🎬 Video extension request received")
+            print(f"📊 Request data: {request.data}")
+            
+            # Get current user
+            user = get_current_user(request)
+            print(f"👤 User: {user.email if user else 'Anonymous'}")
+            
+            # Extract form data
+            source_job_id = request.data.get('source_job_id', '').strip()
+            prompt = request.data.get('prompt', '').strip()
+            
+            print(f"📝 Extracted data - Source Job ID: {source_job_id}, Prompt: {prompt}")
+            
+            # Validate required fields
+            if not source_job_id:
+                print("❌ Validation failed: Source job ID is required")
+                return Response(
+                    ResponseInfo.error("Source job ID is required"),
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            if not prompt:
+                print("❌ Validation failed: Prompt is required")
+                return Response(
+                    ResponseInfo.error("Prompt is required for video extension"),
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Get the source video job
+            try:
+                source_job = VideoGenerationJob.objects.get(job_id=source_job_id)
+            except VideoGenerationJob.DoesNotExist:
+                return Response(
+                    ResponseInfo.error("Source video job not found"),
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            # Check if source job has a completed video
+            if source_job.status != 'completed' or not source_job.video_file_path:
+                return Response(
+                    ResponseInfo.error("Source video must be completed to extend it"),
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Check if user has permission to extend this video
+            if user and source_job.user and source_job.user != user:
+                return Response(
+                    ResponseInfo.error("Access denied"),
+                    status=status.HTTP_403_FORBIDDEN
+                )
+            
+            # Ensure the source job has Veo metadata (only Veo-generated videos can be extended)
+            source_veo_metadata = get_veo_file_metadata(source_job)
+            veo_uri_present = source_veo_metadata.get('veo_file_uri')
+            veo_name_present = source_veo_metadata.get('veo_file_name')
+            if not (veo_uri_present or veo_name_present):
+                return Response(
+                    ResponseInfo.error(
+                        "Original Veo file reference is missing. Please regenerate the video before extending."
+                    ),
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Create a new video generation job for the extended video
+            extended_job = VideoGenerationJob.objects.create(
+                user=user,
+                prompt=prompt,
+                original_prompt=f"Extended from job {source_job_id}: {prompt}",
+                style=source_job.style,
+                quality=source_job.quality,
+                duration=source_job.duration + 7,  # Add 7 seconds
+                status='queued'
+            )
+            
+            print(f"✅ Extended video job created with ID: {extended_job.job_id}")
+            
+            # Start video extension in background thread
+            thread = threading.Thread(
+                target=extend_video_with_veo,
+                args=(extended_job.job_id, prompt, dict(source_veo_metadata))
+            )
+            thread.daemon = True
+            thread.start()
+            
+            print(f"🚀 Background thread started for extended video job {extended_job.job_id}")
+            
+            return Response(
+                ResponseInfo.success({
+                    'job_id': str(extended_job.job_id),
+                    'source_job_id': str(source_job_id),
+                    'status': extended_job.status,
+                    'prompt': prompt,
+                    'duration': extended_job.duration
+                }, "Video extension started successfully"),
+                status=status.HTTP_201_CREATED
+            )
+            
+        except Exception as e:
+            print(f"❌ Error in VideoExtendView: {str(e)}")
+            import traceback
+            print(f"📋 Full traceback: {traceback.format_exc()}")
+            return Response(
+                ResponseInfo.error(f"Failed to start video extension: {str(e)}"),
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
