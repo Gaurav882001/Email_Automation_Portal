@@ -2104,7 +2104,11 @@ class AvatarStatusView(APIView):
                 "error_message": job.error_message,
                 "provider": job.provider,
                 "note": job.note,
-                "thumbnail_url": job.note if job.provider == 'heygen_video' and job.note and (job.note.startswith('http') or job.note.startswith('https')) else None  # For video jobs, note contains thumbnail URL
+                "thumbnail_url": (
+                    job.thumbnail_url if job.thumbnail_url else (
+                        job.note if job.note and (job.note.startswith('http') or job.note.startswith('https')) else None
+                    )
+                )  # Use thumbnail_url field if available, or note (contains preview_image_url for HeyGen dashboard avatars or thumbnail for video jobs)
             }
             
             return Response(
@@ -2162,7 +2166,11 @@ class AvatarJobListView(APIView):
                     "image_key": job.image_key,  # Include image_key for display in UI
                     "error_message": job.error_message,
                     "provider": job.provider,
-                    "thumbnail_url": job.note if job.provider == 'heygen_video' and job.note and (job.note.startswith('http') or job.note.startswith('https')) else None  # For video jobs, note contains thumbnail URL
+                    "thumbnail_url": (
+                        job.thumbnail_url if job.thumbnail_url else (
+                            job.note if job.note and (job.note.startswith('http') or job.note.startswith('https')) else None
+                        )
+                    )  # Use thumbnail_url field if available, or note (contains preview_image_url for HeyGen dashboard avatars or thumbnail for video jobs)
                 }
                 jobs_list.append(job_summary)
             
@@ -3085,6 +3093,9 @@ class AvatarListFromHeyGenView(APIView):
                                 ""
                             )
                         
+                        # Extract preview_image_url separately for thumbnail (HeyGen API provides this)
+                        preview_image_url = avatar.get("preview_image_url") or avatar.get("preview_image") or None
+                        
                         # Convert created_at from timestamp to ISO string if it's a number
                         created_at = avatar.get("created_at", avatar.get("created", ""))
                         if isinstance(created_at, (int, float)):
@@ -3095,6 +3106,7 @@ class AvatarListFromHeyGenView(APIView):
                             "avatar_id": avatar_id,
                             "avatar_name": avatar_name,
                             "avatar_url": avatar_url,
+                            "preview_image_url": preview_image_url,  # Store preview_image_url separately for thumbnail
                             "created_at": created_at,
                             "updated_at": avatar.get("updated_at", avatar.get("updated", "")),
                             "status": avatar.get("train_status", avatar.get("status", "active")),
@@ -3244,6 +3256,10 @@ class AvatarListFromHeyGenView(APIView):
                         
                         if should_update:
                             existing_job.avatar_url = avatar_url
+                            # Update note with preview_image_url if available (for HeyGen dashboard avatars)
+                            preview_image_url = formatted_avatar.get("preview_image_url")
+                            if preview_image_url:
+                                existing_job.note = preview_image_url
                             if existing_job.provider != 'heygen':
                                 existing_job.provider = 'heygen'
                             existing_job.save()
@@ -3270,6 +3286,11 @@ class AvatarListFromHeyGenView(APIView):
                             else:
                                 created_at_dt = timezone.now()
                             
+                            # Get preview_image_url from formatted_avatar for thumbnail
+                            # Store preview_image_url in note field for HeyGen dashboard avatars
+                            preview_image_url = formatted_avatar.get("preview_image_url")
+                            note_value = preview_image_url if preview_image_url else None
+                            
                             new_job = AvatarGenerationJob.objects.create(
                                 user=user,
                                 prompt=avatar_name or "Avatar from HeyGen dashboard",  # Use avatar name as prompt
@@ -3277,6 +3298,7 @@ class AvatarListFromHeyGenView(APIView):
                                 avatar_id=avatar_id,
                                 generation_id=avatar_id,  # Use avatar_id as generation_id for consistency
                                 avatar_url=avatar_url,
+                                note=note_value,  # Save preview_image_url in note field for HeyGen dashboard avatars
                                 status="completed",
                                 progress=100,
                                 completed_at=created_at_dt if created_at_dt else timezone.now(),
@@ -3813,7 +3835,7 @@ Guidelines:
 - Do not add stage directions or camera instructions.
 - Do not wrap the output in quotes or markdown.
 
-Return exactly three enhanced scripts separated by the delimiter <|||>. Do NOT number them. Do NOT add extra text outside the scripts.
+Return exactly three enhanced scripts separated. Do NOT number them. Do NOT add extra text outside the scripts.
 
 Enhanced Scripts:"""
         elif has_script_type_prompt:
@@ -3834,7 +3856,7 @@ Guidelines:
 - Do not wrap the output in quotes or markdown.
 - Ensure each variation has a distinct approach while meeting the user's requirements.
 
-Return exactly three distinct scripts separated by the delimiter <|||>. Do NOT number them. Do NOT add extra text outside the scripts.
+Return exactly three distinct scripts. Do NOT number them. Do NOT add extra text outside the scripts.
 
 Generated Scripts:"""
         else:
@@ -3851,7 +3873,7 @@ Guidelines:
 - Do not add stage directions or camera instructions.
 - Do not wrap the output in quotes or markdown.
 
-Return exactly three distinct scripts separated by the delimiter <|||>. Do NOT number them. Do NOT add extra text outside the scripts.
+Return exactly three distinct scripts. Do NOT number them. Do NOT add extra text outside the scripts.
 
 Generated Scripts:"""
         
