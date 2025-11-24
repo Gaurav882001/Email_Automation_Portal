@@ -79,22 +79,57 @@ def send_otp_email(to_email, name, otp):
     </html>
     """
 
+    # Use EMAIL_SENDER from environment variable as the sender email for OTP emails
+    otp_from_email = os.getenv('EMAIL_SENDER')
+    # Use the app password from environment variable - try OTP-specific one first, then fallback to general one
+    otp_app_password = os.getenv('OTP_SENDER_APP_PASSWORD') or os.getenv('GMAIL_APP_PASSWORD')
+
+    # Validate email sender is set
+    if not otp_from_email:
+        print(f"❌ ERROR: EMAIL_SENDER environment variable is not set!")
+        print(f"   Cannot send OTP email to {to_email}")
+        print(f"   Please set EMAIL_SENDER in your .env file")
+        return False
+
+    # Validate app password is set
+    if not otp_app_password:
+        print(f"❌ ERROR: Neither OTP_SENDER_APP_PASSWORD nor GMAIL_APP_PASSWORD environment variable is set!")
+        print(f"   Cannot send OTP email from {otp_from_email} to {to_email}")
+        print(f"   Please set OTP_SENDER_APP_PASSWORD or GMAIL_APP_PASSWORD with the app password for {otp_from_email}")
+        return False
+
     msg = MIMEMultipart('alternative')
     msg['Subject'] = subject
-    msg['From'] = from_email
+    msg['From'] = otp_from_email
     msg['To'] = to_email
 
     msg.attach(MIMEText(html_content, 'html'))
 
     try:
+        print(f"📧 Attempting to send OTP email from {otp_from_email} to {to_email}")
         with smtplib.SMTP('smtp.gmail.com', 587) as server:
             server.starttls()
-            server.login(from_email, app_password)
-            server.sendmail(from_email, to_email, msg.as_string())
-        print("Email sent successfully")
+            print(f"🔐 Attempting SMTP login with {otp_from_email}")
+            server.login(otp_from_email, otp_app_password)
+            print(f"✅ SMTP login successful")
+            server.sendmail(otp_from_email, to_email, msg.as_string())
+        print(f"✅ OTP email sent successfully from {otp_from_email} to {to_email}")
         return True
+    except smtplib.SMTPAuthenticationError as e:
+        print(f"❌ SMTP Authentication Error: {e}")
+        print(f"   The app password in GMAIL_APP_PASSWORD is not valid for {otp_from_email}")
+        print(f"   SOLUTION: Generate a Gmail App Password for {otp_from_email}:")
+        print(f"   1. Go to https://myaccount.google.com/apppasswords")
+        print(f"   2. Sign in with {otp_from_email}")
+        print(f"   3. Generate a new app password")
+        print(f"   4. Set it in your .env file as: GMAIL_APP_PASSWORD=<generated-app-password>")
+        print(f"   OR set it as: OTP_SENDER_APP_PASSWORD=<generated-app-password>")
+        print(f"   Error details: {str(e)}")
+        return False
     except Exception as e:
-        print("Error sending email:", e)
+        print(f"❌ Error sending OTP email from {otp_from_email} to {to_email}: {e}")
+        import traceback
+        print(f"   Traceback: {traceback.format_exc()}")
         return False
 
 

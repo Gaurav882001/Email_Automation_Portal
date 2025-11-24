@@ -75,7 +75,11 @@ class LoginView(APIView):
 				user.save(update_fields=['otp'])
 
 				# Send OTP via email
-				send_otp_email(user.email, user.name, otp)
+				email_sent = send_otp_email(user.email, user.name, otp)
+				if not email_sent:
+					print(f"⚠️ Failed to send OTP email to {user.email}")
+					# Still return success message to user, but log the error
+					# The OTP is saved in the database, so user can request it again if needed
 
 				return ResponseView.success_response_without_data(
 					message="OTP sent to your email. Please verify to continue.",
