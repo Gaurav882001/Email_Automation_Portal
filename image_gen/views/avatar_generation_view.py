@@ -4303,7 +4303,6 @@ class AvatarScriptGenerationView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
-
 class AvatarScriptRefinementView(APIView):
     """Refine a selected avatar script with additional details"""
     
