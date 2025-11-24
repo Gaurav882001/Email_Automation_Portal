@@ -117,3 +117,43 @@ class AvatarReferenceImage(models.Model):
 
     def __str__(self):
         return f"Reference image for avatar job {self.job.job_id}"
+
+
+class EmailAccount(models.Model):
+    account_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(Users, on_delete=models.CASCADE, related_name='email_accounts')
+    email = models.EmailField()
+    credentials = models.JSONField()  # Store OAuth credentials
+    watch_history_id = models.CharField(max_length=255, null=True, blank=True)
+    watch_expiration = models.DateTimeField(null=True, blank=True)
+    is_active = models.BooleanField(default=True)
+    is_automated = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        unique_together = ['user', 'email']
+
+    def __str__(self):
+        return f"{self.email} - {self.user.email}"
+
+
+class ProcessedEmail(models.Model):
+    email_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    email_account = models.ForeignKey(EmailAccount, on_delete=models.CASCADE, related_name='processed_emails')
+    gmail_message_id = models.CharField(max_length=255, unique=True)
+    subject = models.CharField(max_length=500)
+    sender = models.EmailField()
+    received_date = models.DateTimeField()
+    drive_file_id = models.CharField(max_length=255, null=True, blank=True)
+    drive_folder_name = models.CharField(max_length=50)  # Month name like "November"
+    attachments = models.JSONField(default=list, blank=True)  # Store attachment info: [{"filename": "...", "file_id": "...", "mime_type": "..."}]
+    is_invoice = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-received_date']
+
+    def __str__(self):
+        return f"Email {self.gmail_message_id} - {self.subject[:50]}"

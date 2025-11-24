@@ -8,7 +8,12 @@ from jwt.exceptions import InvalidTokenError, ExpiredSignatureError
 def user_token_auth(view_func):
     @wraps(view_func)
     def _wrapped_view(self, request, *args, **kwargs):
-        auth_header = request.headers.get('Authorization')
+        # Try both headers.get() and META.get() for Authorization header
+        auth_header = None
+        if hasattr(request, 'headers'):
+            auth_header = request.headers.get('Authorization')
+        if not auth_header and hasattr(request, 'META'):
+            auth_header = request.META.get('HTTP_AUTHORIZATION')
 
         if not auth_header or not auth_header.startswith('Bearer '):
             return ResponseView.error_response_without_data(
@@ -27,15 +32,22 @@ def user_token_auth(view_func):
                 code=HTTP_TOKEN_EXPIRED,
                 http_status=HTTP_TOKEN_EXPIRED
             )
-            uid = decoded.get('uid')
-
+            
+            # Try both 'uid' and 'user_id' as JWT payload might use either
+            uid = decoded.get('uid') or decoded.get('user_id')
+            
             if not uid:
+                print(f"JWT payload keys: {list(decoded.keys())}")
+                print(f"JWT payload: {decoded}")
                 return ResponseView.validation_error_response_data(
-                message="Invalid token",
+                message="Invalid token - missing user identifier",
                 code=HTTP_UNAUTHORIZED,
                 )
 
+            # Try filtering by uid first, then by id
             user = Users.objects.filter(uid=uid).first()
+            if not user:
+                user = Users.objects.filter(id=uid).first()
 
             if not user:
                 return ResponseView.error_response_without_data(
@@ -44,16 +56,27 @@ def user_token_auth(view_func):
                     http_status=HTTP_UNAUTHORIZED
                 )
 
-            if user.status == 'inactive':
+            # Check user status if the attribute exists
+            # Use hasattr to avoid AttributeError if status field doesn't exist
+            if hasattr(user, 'status'):
+                if user.status == 'inactive':
+                    return ResponseView.error_response_without_data(
+                        message="Your account is inactive",
+                        code=FAIL,
+                        http_status=HTTP_UNAUTHORIZED
+                    )
+
+                if user.status == 'deleted':
+                    return ResponseView.error_response_without_data(
+                        message="Your account is deleted",
+                        code=FAIL,
+                        http_status=HTTP_UNAUTHORIZED
+                    )
+            
+            # Alternative: check is_active if status doesn't exist
+            if hasattr(user, 'is_active') and not user.is_active:
                 return ResponseView.error_response_without_data(
                     message="Your account is inactive",
-                    code=FAIL,
-                    http_status=HTTP_UNAUTHORIZED
-                )
-
-            if user.status == 'deleted':
-                return ResponseView.error_response_without_data(
-                    message="Your account is deleted",
                     code=FAIL,
                     http_status=HTTP_UNAUTHORIZED
                 )
@@ -74,6 +97,15 @@ def user_token_auth(view_func):
                 http_status=HTTP_UNAUTHORIZED
             )
         except Exception as e:
+            import traceback
+            print("=" * 80)
+            print("USER_TOKEN_AUTH DECORATOR ERROR")
+            print("=" * 80)
+            print(f"Error Type: {type(e).__name__}")
+            print(f"Error Message: {str(e)}")
+            print(f"Full Traceback:")
+            print(traceback.format_exc())
+            print("=" * 80)
             return ResponseView.internal_server_error_response()
 
     return _wrapped_view

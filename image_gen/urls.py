@@ -5,6 +5,8 @@ from .views import auth_view, general_view
 from .views.image_generation_view import ImageGenerationView, ImageStatusView, JobListView, RetryJobView, DeleteJobView, DashboardStatsView, PromptGenerationView, RefinePromptView
 from .views.video_generation_view import VideoGenerationView, VideoStatusView, VideoJobListView, VideoRetryJobView, VideoDeleteJobView, VideoDashboardStatsView, VideoPromptGenerationView, RefineVideoPromptView, VideoExtendView
 from .views.avatar_generation_view import AvatarGenerationView, AvatarStatusView, AvatarJobListView, AvatarRetryJobView, AvatarDeleteJobView, AvatarImageView, AvatarImageFromHeyGenView, AvatarVoicesView, AvatarListFromHeyGenView, AssetListFromHeyGenView, AvatarPromptGenerationView, RefineAvatarPromptView, AvatarScriptGenerationView, AvatarScriptRefinementView
+from .views.email_automation_view import EmailAutomationView, GmailPushWebhookView, EmailAccountListView, EmailAccountDeleteView, ProcessedEmailListView, ProcessedEmailDeleteView
+from .views.oauth_view import GoogleOAuthCallbackView
 
 urlpatterns = [
     
@@ -62,5 +64,14 @@ urlpatterns = [
     path('refine-avatar-prompt/', RefineAvatarPromptView.as_view(), name='refine-avatar-prompt'),
     path('generate-avatar-script/', AvatarScriptGenerationView.as_view(), name='generate-avatar-script'),
     path('refine-avatar-script/', AvatarScriptRefinementView.as_view(), name='refine-avatar-script'),
+    
+    # Email automation
+    path('email-automation/setup/', EmailAutomationView.as_view(), name='email-automation-setup'),
+    path('email-accounts/', EmailAccountListView.as_view(), name='email-account-list'),
+    path('email-accounts/<str:account_id>/', EmailAccountDeleteView.as_view(), name='email-account-delete'),
+    path('processed-emails/', ProcessedEmailListView.as_view(), name='processed-email-list'),
+    path('processed-emails/<str:email_id>/', ProcessedEmailDeleteView.as_view(), name='processed-email-delete'),
+    path('pubsub/push/', GmailPushWebhookView.as_view(), name='gmail-push-webhook'),
+    path('oauth/google/callback/', GoogleOAuthCallbackView.as_view(), name='google-oauth-callback'),
 
 ]
